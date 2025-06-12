@@ -1,0 +1,7 @@
+{
+	"InstallScripts" : 
+	[
+		"/Users/jerry/ARM/reference_model/robot_simulation/build/cmake_install.cmake"
+	],
+	"Parallel" : false
+}
