@@ -135,7 +135,7 @@ public:
     vsg::ref_ptr<vsg::MatrixTransform> bodyTransform;
     vsg::ref_ptr<vsg::MatrixTransform> robotTransform;
     std::vector<vsg::ref_ptr<vsg::MatrixTransform>> legTransforms;
-    
+    std::vector<vsg::ref_ptr<vsg::MatrixTransform>> legNodes; // one per segment
     void createVisualModel();
     vsg::ref_ptr<vsg::MatrixTransform> getRobotNode();
     void addToScene(vsg::ref_ptr<vsg::Group> scene);

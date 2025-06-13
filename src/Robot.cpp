@@ -136,28 +136,22 @@ void Robot::update(double deltaTime) {
 void Robot::updateLegPositions() {
     // Update all leg segment visuals under the robotTransform to match their ODE body transforms
 #ifndef USE_OPENGL_FALLBACK
-    const dReal* bodyPos = dBodyGetPosition(bodyId);
-    const dReal* bodyQ   = dBodyGetQuaternion(bodyId);
-    vsg_quat invBodyQ(
-        static_cast<float>(-bodyQ[1]),
-        static_cast<float>(-bodyQ[2]),
-        static_cast<float>(-bodyQ[3]),
-        static_cast<float>( bodyQ[0]));
+    // For each segment, update its transform using ODE pose
+    int idx = 0;
     for (int i = 0; i < NUM_LEGS; ++i) {
-        for (auto& seg : legs[i].segments) {
+        for (size_t j = 0; j < legs[i].segments.size(); ++j, ++idx) {
+            auto& seg = legs[i].segments[j];
             if (!seg.transform) continue;
-            const dReal* segPos = dBodyGetPosition(seg.body);
-            const dReal* segQ   = dBodyGetQuaternion(seg.body);
-            float lx = static_cast<float>(segPos[0] - bodyPos[0]);
-            float ly = static_cast<float>(segPos[1] - bodyPos[1]);
-            float lz = static_cast<float>(segPos[2] - bodyPos[2]);
-            vsg_quat fq(
-                static_cast<float>(segQ[1]),
-                static_cast<float>(segQ[2]),
-                static_cast<float>(segQ[3]),
-                static_cast<float>(segQ[0]));
-            vsg_quat localQ = invBodyQ * fq;
-            seg.transform->matrix = vsg::translate(lx, ly, lz) * vsg::rotate(localQ);
+            const dReal* p = dBodyGetPosition(seg.body);
+            const dReal* R = dBodyGetRotation(seg.body);
+            vsg::dmat4 M(
+                R[0], R[1], R[2], 0.0,
+                R[4], R[5], R[6], 0.0,
+                R[8], R[9], R[10], 0.0,
+                p[0], p[1], p[2], 1.0);
+            if (idx < int(legNodes.size()) && legNodes[idx]) {
+                legNodes[idx]->matrix = M;
+            }
         }
     }
 #endif
@@ -361,12 +355,20 @@ void Robot::createVisualModel() {
             robotTransform->addChild(bodyNode);
         }
 
-        // Create each segment as its own MatrixTransform, never reused
+        int numSegmentsTotal = 0;
         for (int i = 0; i < NUM_LEGS; ++i) {
-            for (size_t j = 0; j < legs[i].segments.size(); ++j) {
+            numSegmentsTotal += int(legs[i].segments.size());
+        }
+        legNodes.clear();
+        legNodes.resize(numSegmentsTotal);
+
+        int idx = 0;
+        for (int i = 0; i < NUM_LEGS; ++i) {
+            for (size_t j = 0; j < legs[i].segments.size(); ++j, ++idx) {
                 auto& seg = legs[i].segments[j];
                 auto xform = vsg::MatrixTransform::create();
                 seg.transform = xform;
+                legNodes[idx] = xform;
 
                 // Colors for debug: each leg a distinct color, segments: hue variation
                 vsg::vec4 color = vsg::vec4(1.0f, 0.5f, 0.2f, 1.0f); // Default orange
@@ -379,7 +381,7 @@ void Robot::createVisualModel() {
                 legGeomInfo.dz = vsg::vec3(0.0f, 0.0f, seg.length);
                 legGeomInfo.color = color;
 
-                // Use capsule if possible, else sphere for foot
+                // Use cylinder if long, else sphere
                 vsg::ref_ptr<vsg::Node> geomNode;
                 if (seg.length > seg.radius*1.5f)
                     geomNode = builder->createCylinder(legGeomInfo, legStateInfo);
@@ -394,10 +396,16 @@ void Robot::createVisualModel() {
 
     } catch (const std::exception& e) {
         // Fallback: empty transforms
+        legNodes.clear();
+        int numSegmentsTotal = 0;
+        for (int i = 0; i < NUM_LEGS; ++i) numSegmentsTotal += int(legs[i].segments.size());
+        legNodes.resize(numSegmentsTotal);
+        int idx = 0;
         for (int i = 0; i < NUM_LEGS; ++i) {
-            for (size_t j = 0; j < legs[i].segments.size(); ++j) {
+            for (size_t j = 0; j < legs[i].segments.size(); ++j, ++idx) {
                 auto xform = vsg::MatrixTransform::create();
                 legs[i].segments[j].transform = xform;
+                legNodes[idx] = xform;
                 robotTransform->addChild(xform);
             }
         }
