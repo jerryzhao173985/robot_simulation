@@ -257,6 +257,22 @@ for (int i = 0; i < NUM_LEGS; ++i) {
 ```
 【F:src/Robot.cpp†L136-L163】
 
+**Key steps for a robust physics→graphics sync:**
+1. Store a `vsg::MatrixTransform` for each ODE `dBodyID` when constructing the visuals (upper leg, lower leg, foot).
+2. Per frame, update each transform’s `.matrix` from the body’s current world pose:
+   ```cpp
+   const dReal* pos = dBodyGetPosition(odeBody);
+   const dReal* rot = dBodyGetRotation(odeBody);  // row-major 3×3
+   vsg::dmat4 m{
+       rot[0], rot[1], rot[2],   0,
+       rot[4], rot[5], rot[6],   0,
+       rot[8], rot[9], rot[10],  0,
+       pos[0], pos[1], pos[2],   1
+   };
+   legTransformNodes[i]->matrix = m;
+   ```
+3. Do not recreate nodes or geometry each tick—just update the existing transforms’ matrices.
+
 **Terrain Normals (Z-up)**: Normal generation revised in `generateNormals()`:
 ```cpp
 normal.x = (hL - hR)/(2*scale);
