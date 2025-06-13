@@ -134,35 +134,30 @@ void Robot::update(double deltaTime) {
 }
 
 void Robot::updateLegPositions() {
-    // Update leg sphere visuals under the robotTransform so they track ODE foot bodies
+    // Update all leg segment visuals under the robotTransform to match their ODE body transforms
 #ifndef USE_OPENGL_FALLBACK
-    // Get body world transform (for computing local positions)
     const dReal* bodyPos = dBodyGetPosition(bodyId);
     const dReal* bodyQ   = dBodyGetQuaternion(bodyId);
-    // Build inverse of body orientation
     vsg_quat invBodyQ(
         static_cast<float>(-bodyQ[1]),
         static_cast<float>(-bodyQ[2]),
         static_cast<float>(-bodyQ[3]),
         static_cast<float>( bodyQ[0]));
     for (int i = 0; i < NUM_LEGS; ++i) {
-        if (i < static_cast<int>(legTransforms.size()) && !legs[i].segments.empty()) {
-            dBodyID footBody = legs[i].segments.back().body;
-            const dReal* footPos = dBodyGetPosition(footBody);
-            const dReal* footQ   = dBodyGetQuaternion(footBody);
-            // Compute local foot position under body
-            float lx = static_cast<float>(footPos[0] - bodyPos[0]);
-            float ly = static_cast<float>(footPos[1] - bodyPos[1]);
-            float lz = static_cast<float>(footPos[2] - bodyPos[2]);
-            // Compute local foot orientation
+        for (auto& seg : legs[i].segments) {
+            if (!seg.transform) continue;
+            const dReal* segPos = dBodyGetPosition(seg.body);
+            const dReal* segQ   = dBodyGetQuaternion(seg.body);
+            float lx = static_cast<float>(segPos[0] - bodyPos[0]);
+            float ly = static_cast<float>(segPos[1] - bodyPos[1]);
+            float lz = static_cast<float>(segPos[2] - bodyPos[2]);
             vsg_quat fq(
-                static_cast<float>(footQ[1]),
-                static_cast<float>(footQ[2]),
-                static_cast<float>(footQ[3]),
-                static_cast<float>(footQ[0]));
+                static_cast<float>(segQ[1]),
+                static_cast<float>(segQ[2]),
+                static_cast<float>(segQ[3]),
+                static_cast<float>(segQ[0]));
             vsg_quat localQ = invBodyQ * fq;
-            // Update the leg-sphere transform
-            legTransforms[i]->matrix = vsg::translate(lx, ly, lz) * vsg::rotate(localQ);
+            seg.transform->matrix = vsg::translate(lx, ly, lz) * vsg::rotate(localQ);
         }
     }
 #endif
@@ -392,7 +387,8 @@ void Robot::createVisualModel() {
                 std::cout << "Created leg " << i << std::endl;
             }
             
-            legTransforms[i] = legTransform;
+        legTransforms[i] = legTransform;
+        if (!legs[i].segments.empty()) legs[i].segments[0].transform = legTransform;
         }
         
         std::cout << "Robot visual model created successfully" << std::endl;
