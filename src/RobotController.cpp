@@ -6,8 +6,11 @@
 #include <fstream>
 #include "PositionUtils.h"
 
-RobotController::RobotController(Robot* robot) 
-    : robot(robot), controlMode(MANUAL), currentPathIndex(0) {
+RobotController::RobotController(Robot* robot, PhysicsWorld* physicsWorld)
+    : robot(robot)
+    , physicsWorld(physicsWorld)
+    , controlMode(MANUAL)
+    , currentPathIndex(0) {
     
     // Initialize control input
     currentInput.targetVelocity = vsg_vec3();
@@ -266,20 +269,28 @@ void RobotController::avoidObstacles() {
 }
 
 void RobotController::maintainBalance() {
+    if (!dynamicStabilityEnabled || !physicsWorld) return;
+
+    // Orientation-based PID corrections
     vsg::quat orientation = robot->getOrientation();
     vsg::vec3 euler = eulerFromQuat(orientation);
-    
-    // PID control for stability
-    float pitchCorrection = pitchController.update(-euler.x, 0.016f);
-    float rollCorrection = rollController.update(-euler.z, 0.016f);
-    
-    // Apply corrections through motor commands
-    std::vector<float> stabilizationCommands;
-    stabilizationCommands.push_back(pitchCorrection);
-    stabilizationCommands.push_back(rollCorrection);
-    
-    // Blend with current commands
-    robot->applyControl(stabilizationCommands);
+    float pitchCorr = pitchController.update(-euler.x, 0.016f);
+    float rollCorr  = rollController.update(-euler.z, 0.016f);
+
+    // Apply contact-based support forces on each foot
+    auto footGeoms = robot->getFootGeoms();
+    for (auto footGeom : footGeoms) {
+        auto contacts = physicsWorld->getContactPoints(footGeom);
+        for (auto& cp : contacts) {
+            // cp.normal points upward from foot; apply corrective push
+            float forceGain = pitchCorr + rollCorr;
+            dBodyAddForceAtPos(robot->getBody(),
+                cp.normal.x * forceGain,
+                cp.normal.y * forceGain,
+                cp.normal.z * forceGain,
+                cp.position.x, cp.position.y, cp.position.z);
+        }
+    }
 }
 
 void RobotController::optimizeGait() {
@@ -304,21 +315,17 @@ void RobotController::adaptToTerrain() {
     // Analyze sensor data for terrain type
     // Adjust control parameters accordingly
     
-    // Simple terrain detection based on foot contact patterns
-    auto sensorData = robot->getSensorReadings();
-    
-    // Count ground contacts
-    int groundContacts = 0;
-    for (size_t i = sensorData.size() - 6; i < sensorData.size(); ++i) {
-        if (sensorData[i] > 0.5f) groundContacts++;
-    }
-    
-    // Adjust aggressiveness based on terrain difficulty
-    if (groundContacts < 3) {
-        // Difficult terrain - be more careful
+    // Terrain adaptation: use body-ground contact count to gauge support stability
+    if (!physicsWorld) return;
+    dGeomID bodyGeom = robot->getBodyGeom();
+    auto contacts = physicsWorld->getContactPoints(bodyGeom);
+    int numContacts = static_cast<int>(contacts.size());
+    // Few contacts -> uneven support, reduce aggressiveness
+    if (numContacts < 2) {
         aggressiveness = std::max(0.2f, aggressiveness - 0.01f);
-    } else if (groundContacts >= 5) {
-        // Easy terrain - can be more aggressive
+    }
+    // Many contacts -> stable support, can increase aggressiveness
+    else if (numContacts >= 4) {
         aggressiveness = std::min(0.8f, aggressiveness + 0.01f);
     }
 }

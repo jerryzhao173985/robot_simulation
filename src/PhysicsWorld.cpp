@@ -138,6 +138,10 @@ void PhysicsWorld::handleCollision(dGeomID o1, dGeomID o2) {
             cp.friction = contact[i].surface.mu;
             cp.geom1 = o1;
             cp.geom2 = o2;
+            cp.body1 = b1;
+            cp.body2 = b2;
+            cp.normal1 = cp.normal;
+            cp.normal2 = cp.normal * -1.0f;
             activeContacts.push_back(cp);
         }
     }
@@ -440,15 +444,23 @@ dGeomID PhysicsWorld::createStaticTrimesh(const std::vector<float>& vertices, co
 
 std::vector<PhysicsWorld::ContactPoint> PhysicsWorld::getContactPoints(dGeomID geom) {
     std::vector<ContactPoint> contacts;
-    
-    for (const auto& contact : activeContacts) {
-        // Only include contacts involving the specified geometry
-        if (contact.geom1 == geom || contact.geom2 == geom) {
-            contacts.push_back(contact);
+    for (const auto& cp : activeContacts) {
+        if (cp.geom1 == geom) {
+            ContactPoint oriented = cp;
+            oriented.normal = cp.normal1;
+            contacts.push_back(oriented);
+        } else if (cp.geom2 == geom) {
+            ContactPoint oriented = cp;
+            oriented.normal = cp.normal2;
+            contacts.push_back(oriented);
         }
     }
-    
     return contacts;
+}
+
+// Return all active contacts (no filtering).
+std::vector<PhysicsWorld::ContactPoint> PhysicsWorld::getActiveContacts() const {
+    return activeContacts;
 }
 
 bool PhysicsWorld::checkRaycast(const vsg_vec3& start, const vsg_vec3& direction, float maxDistance, vsg_vec3& hitPoint) {

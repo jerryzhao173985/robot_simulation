@@ -91,7 +91,7 @@ public:
         std::cout << "Robot physics and visual model initialized" << std::endl;
 
         // Create robot controller
-        controller = std::make_unique<RobotController>(robot.get());
+        controller = std::make_unique<RobotController>(robot.get(), physicsWorld.get());
         controller->setControlMode(RobotController::AUTONOMOUS);
         controller->enableObstacleAvoidance(true);
         controller->enableDynamicStability(true);

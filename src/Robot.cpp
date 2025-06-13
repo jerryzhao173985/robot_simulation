@@ -10,7 +10,9 @@ Robot::Robot(dWorldID world, dSpaceID space,
              vsg::ref_ptr<vsg::Group> sceneGraph
 #endif
 )
-    : sceneGraph(sceneGraph) {
+    : sceneGraph(sceneGraph)
+    , world(world)
+    , space(space) {
     
     // Initialize physics
     bodyId = dBodyCreate(world);
@@ -26,6 +28,7 @@ Robot::Robot(dWorldID world, dSpaceID space,
     // Create collision geometry
     dGeomID geom = dCreateBox(space, config.bodySize.x, config.bodySize.y, config.bodySize.z);
     dGeomSetBody(geom, bodyId);
+    bodyGeom = geom;
     
     // Initialize visual representation
     createVisualModel();
@@ -72,15 +75,43 @@ void Robot::createBody() {
 }
 
 void Robot::createLegs() {
-    // Simplified leg creation - just initialize the containers
-    legBodies.resize(6);
-    legJoints.resize(6);
-    
-    // Create simple leg bodies (this would be expanded with proper physics)
-    for (int i = 0; i < 6; ++i) {
-        // For now, just set to nullptr - will be implemented later
-        legBodies[i] = nullptr;
-        legJoints[i] = nullptr;
+    legBodies.resize(NUM_LEGS);
+    legJoints.resize(NUM_LEGS);
+    for (int i = 0; i < NUM_LEGS; ++i) {
+        // compute attachment point relative to body center
+        vsg_vec3 attach = getLegPosition(i);
+        // create foot body
+        dBodyID footBody = dBodyCreate(world);
+        dMass m;
+        dMassSetSphereTotal(&m, 0.1f, config.footRadius);
+        dBodySetMass(footBody, &m);
+        // position foot relative to body
+        const dReal* bodyPos = dBodyGetPosition(bodyId);
+        dBodySetPosition(footBody,
+            bodyPos[0] + attach.x,
+            bodyPos[1] + attach.y,
+            bodyPos[2] + attach.z - config.footRadius);
+        // create foot geometry
+        dGeomID footGeom = dCreateSphere(space, config.footRadius);
+        dGeomSetBody(footGeom, footBody);
+        // attach foot to body via ball joint
+        dJointID joint = dJointCreateBall(world, 0);
+        dJointAttach(joint, bodyId, footBody);
+        dJointSetBallAnchor(joint,
+            bodyPos[0] + attach.x,
+            bodyPos[1] + attach.y,
+            bodyPos[2] + attach.z);
+        // store segment
+        legs[i].segments.clear();
+        LegSegment seg;
+        seg.body = footBody;
+        seg.geom = footGeom;
+        seg.joint = joint;
+        seg.length = config.footRadius;
+        seg.radius = config.footRadius;
+        legs[i].segments.push_back(seg);
+        legBodies[i] = footBody;
+        legJoints[i] = joint;
     }
 }
 
@@ -98,8 +129,15 @@ void Robot::update(double deltaTime) {
 }
 
 void Robot::updateLegPositions() {
-    // Simplified leg position updates
-    // This would contain the actual leg movement logic
+#ifndef USE_OPENGL_FALLBACK
+    // Update visual transforms for each foot
+    for (int i = 0; i < NUM_LEGS; ++i) {
+        if (i < (int)legTransforms.size() && !legs[i].segments.empty()) {
+            const dReal* pos = dBodyGetPosition(legs[i].segments.back().body);
+            legTransforms[i]->matrix = vsg::translate(pos[0], pos[1], pos[2]);
+        }
+    }
+#endif
 }
 
 vsg_vec3 Robot::getLegPosition(int legIndex) const {
@@ -177,6 +215,26 @@ vsg_vec3 Robot::getVelocity() const {
 vsg_quat Robot::getOrientation() const {
     const dReal* q = dBodyGetQuaternion(bodyId);
     return vsg_quat(q[1], q[2], q[3], q[0]);
+}
+
+dBodyID Robot::getBody() const {
+    return bodyId;
+}
+
+
+std::vector<dGeomID> Robot::getFootGeoms() const {
+    std::vector<dGeomID> geoms;
+    geoms.reserve(NUM_LEGS);
+    for (int i = 0; i < NUM_LEGS; ++i) {
+        if (!legs[i].segments.empty()) {
+            geoms.push_back(legs[i].segments.back().geom);
+        }
+    }
+    return geoms;
+}
+
+dGeomID Robot::getBodyGeom() const {
+    return bodyGeom;
 }
 
 bool Robot::isStable() const {

@@ -203,6 +203,30 @@ camera.position = camera.target + vec3(radius*cos(angle), radius*sin(angle), cam
 ```
 【F:src/Visualizer.cpp†L111-L119】【F:src/Visualizer.cpp†L546-L554】【F:src/Visualizer.cpp†L586-L594】
 
+**ContactPoint API Enhancement**: `getContactPoints(dGeomID geom)` now returns contacts with normals automatically oriented outward from the queried geometry (so callers no longer need to flip normals).  Both-sided normals remain available via `ContactPoint.normal1`/`normal2`, and all active contacts can be retrieved with `getActiveContacts()`:
+```cpp
+auto contacts = physicsWorld.getContactPoints(legGeom);
+for (auto& cp : contacts) {
+    // cp.normal points outward from legGeom toward the other geometry
+    // cp.normal1/normal2 hold both-sided normals if needed
+    // Use cp.depth, cp.friction, cp.body1/2, cp.geom1/2 for further logic
+}
+```
+
+**Hexapod Balance Enhancement**: The controller now samples per-leg foot contacts via `robot->getFootGeoms()` and applies corrective forces along each contact normal in `maintainBalance()`:
+```cpp
+for (auto footGeom : robot->getFootGeoms()) {
+    for (auto& cp : physicsWorld->getContactPoints(footGeom)) {
+        // cp.normal is upward from foot → ground: apply force at contact point
+        dBodyAddForceAtPos(robot->getBody(),
+            cp.normal.x * forceGain,
+            cp.normal.y * forceGain,
+            cp.normal.z * forceGain,
+            cp.position.x, cp.position.y, cp.position.z);
+    }
+}
+```
+
 **Terrain Normals (Z-up)**: Normal generation revised in `generateNormals()`:
 ```cpp
 normal.x = (hL - hR)/(2*scale);

@@ -118,6 +118,11 @@ public:
     std::vector<float> getSensorReadings() const;
     float getEnergyConsumption() const { return energyConsumption; }
     bool isStable() const;
+    // ODE body & geometry handles (for contact-based control)
+    dBodyID getBody() const;
+    dGeomID getBodyGeom() const;
+    // Get all foot geometry IDs (one per leg) for contact sensing
+    std::vector<dGeomID> getFootGeoms() const;
     
     // Visual customization
     void setBodyColor(const vsg_vec4& color);
@@ -154,9 +159,14 @@ private:
     void maintainBalance();
     
     std::mutex navigationMutex;
-    
+
+    // ODE simulation context
+    dWorldID world;
+    dSpaceID space;
+
     // Physics bodies
     dBodyID bodyId;
+    dGeomID bodyGeom;    // box geometry for main body (used for contact queries)
     std::vector<dBodyID> legBodies;
     std::vector<dJointID> legJoints;
     

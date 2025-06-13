@@ -56,6 +56,10 @@ public:
         float friction;
         dGeomID geom1;
         dGeomID geom2;
+        dBodyID body1;      // associated body for geom1
+        dBodyID body2;      // associated body for geom2
+        vsg_vec3 normal1;   // outward normal relative to geom1 (from geom1 to geom2)
+        vsg_vec3 normal2;   // outward normal relative to geom2 (from geom2 to geom1)
     };
 
     struct PhysicsObject {
@@ -93,7 +97,10 @@ public:
     void setMaxContacts(int max) { maxContacts = max; }
     
     // Collision detection
+    // Get contacts involving the specified geometry (normals oriented outward from that geom)
     std::vector<ContactPoint> getContactPoints(dGeomID geom);
+    // Get all active contacts without filtering or reorientation
+    std::vector<ContactPoint> getActiveContacts() const;
     bool checkRaycast(const vsg_vec3& start, const vsg_vec3& direction, float maxDistance, vsg_vec3& hitPoint);
     
     // Getters

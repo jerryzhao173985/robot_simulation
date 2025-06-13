@@ -31,6 +31,7 @@
 
 #include <vector>
 #include <memory>
+#include "PhysicsWorld.h"
 #include <functional>
 #include <map>
 #include <algorithm>
@@ -61,7 +62,7 @@ public:
         float tolerance;
     };
 
-    RobotController(Robot* robot);
+    RobotController(Robot* robot, PhysicsWorld* physicsWorld);
     ~RobotController();
 
     void update(double deltaTime);
@@ -127,6 +128,7 @@ private:
     };
     
     Robot* robot;
+    PhysicsWorld* physicsWorld;
     ControlMode controlMode;
     ControlInput currentInput;
     NavigationGoal currentGoal;
