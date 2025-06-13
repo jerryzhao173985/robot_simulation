@@ -343,69 +343,66 @@ vsg_vec3 Robot::eulerAnglesFromQuat(const vsg_quat& q) const {
 }
 
 void Robot::createVisualModel() {
-#ifndef USE_OPENGL_FALLBACK
+    #ifndef USE_OPENGL_FALLBACK
     robotTransform = vsg::MatrixTransform::create();
-    
+
     try {
-        // Create builder
         auto builder = vsg::Builder::create();
-        
+
         // Create robot body
         vsg::GeometryInfo bodyGeomInfo;
         vsg::StateInfo bodyStateInfo;
-        
         bodyGeomInfo.dx = vsg::vec3(config.bodySize.x, 0.0f, 0.0f);
         bodyGeomInfo.dy = vsg::vec3(0.0f, config.bodySize.y, 0.0f);
         bodyGeomInfo.dz = vsg::vec3(0.0f, 0.0f, config.bodySize.z);
         bodyGeomInfo.color = vsg::vec4(bodyColor.x, bodyColor.y, bodyColor.z, bodyColor.w);
-        
         auto bodyNode = builder->createBox(bodyGeomInfo, bodyStateInfo);
         if (bodyNode) {
             robotTransform->addChild(bodyNode);
-            std::cout << "Created robot body box" << std::endl;
         }
-        
-        // Create legs as spheres
-        legTransforms.resize(6);
-        for (int i = 0; i < 6; ++i) {
-            auto legTransform = vsg::MatrixTransform::create();
-            auto legPosition = getLegPosition(i);
-            legTransform->matrix = vsg::translate(legPosition.x, legPosition.y, legPosition.z);
-            
-            vsg::GeometryInfo legGeomInfo;
-            vsg::StateInfo legStateInfo;
-            
-            legGeomInfo.dx = vsg::vec3(config.footRadius, 0.0f, 0.0f);
-            legGeomInfo.dy = vsg::vec3(0.0f, config.footRadius, 0.0f);
-            legGeomInfo.dz = vsg::vec3(0.0f, 0.0f, config.footRadius);
-            legGeomInfo.color = vsg::vec4(1.0f, 1.0f, 0.0f, 1.0f);  // Yellow feet
-            
-            auto legNode = builder->createSphere(legGeomInfo, legStateInfo);
-            if (legNode) {
-                legTransform->addChild(legNode);
-                robotTransform->addChild(legTransform);
-                std::cout << "Created leg " << i << std::endl;
+
+        // Create each segment as its own MatrixTransform, never reused
+        for (int i = 0; i < NUM_LEGS; ++i) {
+            for (size_t j = 0; j < legs[i].segments.size(); ++j) {
+                auto& seg = legs[i].segments[j];
+                auto xform = vsg::MatrixTransform::create();
+                seg.transform = xform;
+
+                // Colors for debug: each leg a distinct color, segments: hue variation
+                vsg::vec4 color = vsg::vec4(1.0f, 0.5f, 0.2f, 1.0f); // Default orange
+                if (j == 0) color = vsg::vec4(1.0-(i/5.0f), i/5.0f, 1.0f, 1.0f); // rainbow feet for leg/debug
+
+                vsg::GeometryInfo legGeomInfo;
+                vsg::StateInfo legStateInfo;
+                legGeomInfo.dx = vsg::vec3(seg.radius, 0.0f, 0.0f);
+                legGeomInfo.dy = vsg::vec3(0.0f, seg.radius, 0.0f);
+                legGeomInfo.dz = vsg::vec3(0.0f, 0.0f, seg.length);
+                legGeomInfo.color = color;
+
+                // Use capsule if possible, else sphere for foot
+                vsg::ref_ptr<vsg::Node> geomNode;
+                if (seg.length > seg.radius*1.5f)
+                    geomNode = builder->createCylinder(legGeomInfo, legStateInfo);
+                else
+                    geomNode = builder->createSphere(legGeomInfo, legStateInfo);
+
+                if (geomNode)
+                    xform->addChild(geomNode);
+                robotTransform->addChild(xform);
             }
-            
-        legTransforms[i] = legTransform;
-        if (!legs[i].segments.empty()) legs[i].segments[0].transform = legTransform;
         }
-        
-        std::cout << "Robot visual model created successfully" << std::endl;
-        
+
     } catch (const std::exception& e) {
-        std::cout << "VSG creation failed: " << e.what() << std::endl;
-        
-        // Ultra-simple fallback - just create empty transforms
-        legTransforms.resize(6);
-        for (int i = 0; i < 6; ++i) {
-            legTransforms[i] = vsg::MatrixTransform::create();
-            robotTransform->addChild(legTransforms[i]);
+        // Fallback: empty transforms
+        for (int i = 0; i < NUM_LEGS; ++i) {
+            for (size_t j = 0; j < legs[i].segments.size(); ++j) {
+                auto xform = vsg::MatrixTransform::create();
+                legs[i].segments[j].transform = xform;
+                robotTransform->addChild(xform);
+            }
         }
-        
-        std::cout << "Created fallback empty robot" << std::endl;
     }
-#endif
+    #endif
 }
 
 #ifndef USE_OPENGL_FALLBACK
