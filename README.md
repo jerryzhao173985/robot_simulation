@@ -227,27 +227,35 @@ for (auto footGeom : robot->getFootGeoms()) {
 }
 ```
 
-**Leg Visuals Sync**: In `Robot::updateLegPositions()` we now align each foot-sphere's VSG transform to the ODE body transform (position + rotation):
-(Note this section could be incorrect)
-
+**Leg Visuals Sync**: In `Robot::updateLegPositions()` we now align each leg-segment visual under the robotTransform to its ODE body transforms (position + rotation):
 ```cpp
-// Use body inverse rotation and subtract the body position to compute local leg transforms
+// Align each leg-segment visual under the robotTransform to its ODE body’s world transform
 const dReal* bodyPos = dBodyGetPosition(bodyId);
 const dReal* bodyQ   = dBodyGetQuaternion(bodyId);
-vsg_quat invBodyQ(-bodyQ[1], -bodyQ[2], -bodyQ[3], bodyQ[0]);
+vsg_quat invBodyQ(
+    static_cast<float>(-bodyQ[1]),
+    static_cast<float>(-bodyQ[2]),
+    static_cast<float>(-bodyQ[3]),
+    static_cast<float>( bodyQ[0]));
 for (int i = 0; i < NUM_LEGS; ++i) {
-    dBodyID footBody = legs[i].segments.back().body;
-    const dReal* footPos = dBodyGetPosition(footBody);
-    const dReal* footQ   = dBodyGetQuaternion(footBody);
-    // Compute local position & orientation under the robot root
-    float lx = static_cast<float>(footPos[0] - bodyPos[0]);
-    float ly = static_cast<float>(footPos[1] - bodyPos[1]);
-    float lz = static_cast<float>(footPos[2] - bodyPos[2]);
-    vsg_quat fq(footQ[1], footQ[2], footQ[3], footQ[0]);
-    vsg_quat localQ = invBodyQ * fq;
-    legTransforms[i]->matrix = vsg::translate(lx, ly, lz) * vsg::rotate(localQ);
+    for (auto& seg : legs[i].segments) {
+        if (!seg.transform) continue;
+        const dReal* segPos = dBodyGetPosition(seg.body);
+        const dReal* segQ   = dBodyGetQuaternion(seg.body);
+        float lx = static_cast<float>(segPos[0] - bodyPos[0]);
+        float ly = static_cast<float>(segPos[1] - bodyPos[1]);
+        float lz = static_cast<float>(segPos[2] - bodyPos[2]);
+        vsg_quat fq(
+            static_cast<float>(segQ[1]),
+            static_cast<float>(segQ[2]),
+            static_cast<float>(segQ[3]),
+            static_cast<float>(segQ[0]));
+        vsg_quat localQ = invBodyQ * fq;
+        seg.transform->matrix = vsg::translate(lx, ly, lz) * vsg::rotate(localQ);
+    }
 }
 ```
+【F:src/Robot.cpp†L136-L163】
 
 **Terrain Normals (Z-up)**: Normal generation revised in `generateNormals()`:
 ```cpp
