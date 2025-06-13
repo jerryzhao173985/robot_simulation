@@ -74,7 +74,7 @@ void RobotController::update(double deltaTime) {
     
     // Always maintain balance if enabled
     if (dynamicStabilityEnabled) {
-        maintainBalance();
+        maintainBalance(static_cast<float>(deltaTime));
     }
     
     // Update performance metrics
@@ -268,28 +268,42 @@ void RobotController::avoidObstacles() {
     }
 }
 
-void RobotController::maintainBalance() {
+void RobotController::maintainBalance(float deltaTime) {
     if (!dynamicStabilityEnabled || !physicsWorld) return;
 
     // Orientation-based PID corrections
     vsg::quat orientation = robot->getOrientation();
     vsg::vec3 euler = eulerFromQuat(orientation);
-    float pitchCorr = pitchController.update(-euler.x, 0.016f);
-    float rollCorr  = rollController.update(-euler.z, 0.016f);
+    float pitchCorr = pitchController.update(-euler.x, deltaTime);
+    float rollCorr  = rollController.update(-euler.z, deltaTime);
+
+    // Scale corrective forces for body weight support (tunable)
+    static constexpr float balanceForceScale = 200.0f;
 
     // Apply contact-based support forces on each foot
     auto footGeoms = robot->getFootGeoms();
+    int totalContacts = 0;
     for (auto footGeom : footGeoms) {
         auto contacts = physicsWorld->getContactPoints(footGeom);
+        totalContacts += static_cast<int>(contacts.size());
         for (auto& cp : contacts) {
-            // cp.normal points upward from foot; apply corrective push
-            float forceGain = pitchCorr + rollCorr;
+            float forceGain = (pitchCorr + rollCorr) * balanceForceScale;
             dBodyAddForceAtPos(robot->getBody(),
-                cp.normal.x * forceGain,
-                cp.normal.y * forceGain,
-                cp.normal.z * forceGain,
-                cp.position.x, cp.position.y, cp.position.z);
+                              cp.normal.x * forceGain,
+                              cp.normal.y * forceGain,
+                              cp.normal.z * forceGain,
+                              cp.position.x, cp.position.y, cp.position.z);
         }
+    }
+
+    // Debug log every ~60 calls (~1s at 60Hz)
+    static int dbgCounter = 0;
+    if (++dbgCounter % 60 == 0) {
+        std::cout << "[Balance] pitch=" << euler.x
+                  << " roll=" << euler.z
+                  << " contactCount=" << totalContacts
+                  << " gain=" << (pitchCorr + rollCorr) * balanceForceScale
+                  << std::endl;
     }
 }
 

@@ -14,7 +14,7 @@ PhysicsWorld::PhysicsWorld() {
     dWorldSetCFM(world, 1e-5);
     dWorldSetContactMaxCorrectingVel(world, 0.9f);
     dWorldSetContactSurfaceLayer(world, 0.001f);
-    dWorldSetAutoDisableFlag(world, 1);
+    dWorldSetAutoDisableFlag(world, 0);
     dWorldSetQuickStepNumIterations(world, 20);
     
     // Create ground plane at Z=0 (Z-up coordinate system)

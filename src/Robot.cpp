@@ -63,9 +63,14 @@ void Robot::createBody() {
     dMass mass;
     dMassSetBoxTotal(&mass, 5.0f, config.bodySize.x, config.bodySize.y, config.bodySize.z);
     dBodySetMass(bodyId, &mass);
+    // Add damping so oscillations decay
+    dBodySetDamping(bodyId, 0.1f, 0.1f);
     
-    // Set initial position - Z-up coordinate system to match VSG visual model
-    dBodySetPosition(bodyId, 0.0f, 0.0f, 0.8f);  // Z-up: body at 0.8m height
+    // Set initial position so feet touch the ground at start
+    // body half-height + leg lengths + foot radius
+    float initZ = config.bodySize.z * 0.5f + config.upperLegLength + config.lowerLegLength + config.footRadius;
+    dBodySetPosition(bodyId, 0.0f, 0.0f, initZ);
+    std::cout << "[Robot] Initial body Z position = " << initZ << std::endl;
     
     // Initialize leg containers
     legBodies.resize(6);

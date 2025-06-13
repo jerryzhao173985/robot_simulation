@@ -110,7 +110,7 @@ private:
     void planPath();
     void followPath(double deltaTime);
     void avoidObstacles();
-    void maintainBalance();
+    void maintainBalance(float deltaTime);
     void optimizeGait();
     void adaptToTerrain();
     void smoothPath();
