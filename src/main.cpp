@@ -95,9 +95,9 @@ public:
         addBasicGeometry();
 
         // Setup camera
-        visualizer->setCameraPosition(vsg_vec3(10.0f, 8.0f, 10.0f));
+        visualizer->setCameraPosition(vsg_vec3(20.0f, 20.0f, 20.0f));
         visualizer->setCameraTarget(vsg_vec3(0.0f, 0.0f, 0.0f));
-        visualizer->enableCameraFollow(true);
+        visualizer->enableCameraFollow(false);
 
         // Enable visual effects
         visualizer->enablePostProcessing(true);
@@ -213,11 +213,11 @@ private:
         for (int i = 0; i < 10; ++i) {
             float x = (float)(rand() % 40 - 20);
             float z = (float)(rand() % 40 - 20);
-            float y = terrain->getHeightAt(x, z) + 0.5f;
+            float height = terrain->getHeightAt(x, z) + 0.5f;
             float size = 0.5f + (float)(rand() % 20) / 10.0f;
 
             physicsWorld->createBox(
-                vsg_vec3(x, y, z),
+                vsg_vec3(x, z, height),
                 vsg_vec3(size, size, size),
                 10.0f
             );
@@ -225,8 +225,8 @@ private:
 
         // Add ramps and stairs
         terrain->addRamp(
-            vsg_vec3(-10.0f, 0.0f, -10.0f),
-            vsg_vec3(-5.0f, 2.0f, -10.0f),
+            vsg_vec3(-10.0f, -10.0f, 0.0f),
+            vsg_vec3(-5.0f, -10.0f, 2.0f),
             3.0f
         );
     }
@@ -235,7 +235,7 @@ private:
 #ifndef USE_OPENGL_FALLBACK
         // Add a simple transform with basic content
         auto transform = vsg::MatrixTransform::create();
-        transform->matrix = vsg::translate(0.0, 1.0, 0.0);
+        transform->matrix = vsg::translate(0.0, 0.0, 1.0);
         
         // Add transform to scene to test basic VSG rendering pipeline
         sceneRoot->addChild(transform);

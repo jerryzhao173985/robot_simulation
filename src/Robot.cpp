@@ -31,6 +31,12 @@ Robot::Robot(dWorldID world, dSpaceID space,
     addToScene(sceneGraph);
     
     std::cout << "Robot initialized with physics and visual components" << std::endl;
+    // Verify leg attachment positions (X, Y horizontal plane; Z height)
+    for (int i = 0; i < NUM_LEGS; ++i) {
+        vsg_vec3 pos = getLegPosition(i);
+        std::cout << "Leg " << i << " attachment position (X, Y, Z): ("
+                  << pos.x << ", " << pos.y << ", " << pos.z << ")" << std::endl;
+    }
 }
 
 Robot::~Robot() {
