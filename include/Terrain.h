@@ -3,6 +3,7 @@
 #ifdef USE_OPENGL_FALLBACK
     #include <cmath>
     #include <unordered_map>
+    #include <vector>
     
     // Simple vector classes for fallback mode
     struct vec3 {

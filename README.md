@@ -184,6 +184,48 @@ The codebase uses conditional compilation to support multiple graphics backends:
 - **Strategy Pattern**: Swappable control algorithms and graphics backends
 - **Factory Pattern**: Dynamic object creation
 
+## Recent Core Updates
+
+**Z-up Coordinate System**: Adopted Z as the vertical axis across the codebase. Introduced `makePosition(x,zUp,yForward)` helper:
+```cpp
+inline vsg::vec3 makePosition(float x, float zUp, float yForward);
+```
+【F:include/PositionUtils.h†L12-L19】
+
+**Unified Camera Math**: Free, follow, and orbit camera modes now consistently use Z-up:
+```cpp
+// Free-camera (fallback)
+camera.position = { freeDist*cos(el)*sin(az), freeDist*cos(el)*cos(az), freeDist*sin(el) };
+// Follow-camera
+camera.position = camera.target + vec3(-dist*cos(rot), -dist*sin(rot), height);
+// Orbit-camera
+camera.position = camera.target + vec3(radius*cos(angle), radius*sin(angle), camera.position.z - camera.target.z);
+```
+【F:src/Visualizer.cpp†L111-L119】【F:src/Visualizer.cpp†L546-L554】【F:src/Visualizer.cpp†L586-L594】
+
+**Terrain Normals (Z-up)**: Normal generation revised in `generateNormals()`:
+```cpp
+normal.x = (hL - hR)/(2*scale);
+normal.y = (hD - hU)/(2*scale);
+normal.z = 2.0f;
+normals[i] = normalize(normal);
+```
+【F:src/Terrain.cpp†L283-L291】
+
+**Hexapod Leg Placement**: Leg attachment positions refactored onto the XY plane with Z offset:
+```cpp
+std::array<double,3> legY = {...};
+double x = sideSign*halfWidth, y = legY[pairIndex], z = -halfHeight;
+return vec3(x, y, z);
+```
+【F:src/Robot.cpp†L106-L119】
+
+**VSync Control**: Default V-Sync disabled to avoid frame-rate caps:
+```cpp
+visualizer->enableVSync(false);
+```
+【F:src/main.cpp†L58-L61】
+
 ## Platform-Specific Notes
 
 ### macOS

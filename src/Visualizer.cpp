@@ -85,13 +85,15 @@
 #include <vsg/utils/ShaderSet.h>
 #endif
 
+#include "PositionUtils.h"
+
 Visualizer::Visualizer(uint32_t width, uint32_t height) 
     : windowWidth(width), windowHeight(height) {
     
     // Initialize camera
     camera.position = vsg_vec3(10.0f, 10.0f, 10.0f);
     camera.target = vsg_vec3(0.0f, 0.0f, 0.0f);
-    camera.up = vsg_vec3(0.0f, 1.0f, 0.0f);
+    camera.up = vsg_vec3(0.0f, 0.0f, 1.0f);
     camera.fov = 60.0f;
     camera.nearPlane = 0.1f;
     camera.farPlane = 1000.0f;
@@ -496,9 +498,10 @@ void Visualizer::updateCamera() {
             freeDistance = std::max(1.0f, freeDistance - zoomStep);
         if (glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_KP_SUBTRACT) == GLFW_PRESS)
             freeDistance += zoomStep;
+        // Z-up free-camera: elevation moves along Z; horizontal rotation in X-Y plane
         camera.position.x = freeDistance * cos(freeElevation) * sin(freeAzimuth);
-        camera.position.y = freeDistance * sin(freeElevation);
-        camera.position.z = freeDistance * cos(freeElevation) * cos(freeAzimuth);
+        camera.position.y = freeDistance * cos(freeElevation) * cos(freeAzimuth);
+        camera.position.z = freeDistance * sin(freeElevation);
         camera.target      = vsg_vec3(0.0f, 0.0f, 0.0f);
         return;
     }
@@ -508,8 +511,8 @@ void Visualizer::updateCamera() {
     if (cameraMode == 1) {
         vsg_vec3 offset(
             -camera.followDistance * cos(frameTime * 0.1f),
-            camera.followHeight,
-            -camera.followDistance * sin(frameTime * 0.1f)
+            -camera.followDistance * sin(frameTime * 0.1f),
+            camera.followHeight
         );
         
         camera.position = camera.target + offset;
@@ -528,8 +531,8 @@ void Visualizer::updateCamera() {
         
         camera.position = camera.target + vsg_vec3(
             radius * cos(angle),
-            camera.position.y - camera.target.y,
-            radius * sin(angle)
+            radius * sin(angle),
+            camera.position.z - camera.target.z
         );
         
 #ifndef USE_OPENGL_FALLBACK

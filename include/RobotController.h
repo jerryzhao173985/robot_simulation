@@ -2,6 +2,7 @@
 
 #ifdef USE_OPENGL_FALLBACK
     #include <cmath>
+    #include <vector>
     
     // Simple vector classes for fallback mode
     struct vec3 {

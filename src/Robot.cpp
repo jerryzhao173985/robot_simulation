@@ -1,4 +1,5 @@
 #include "Robot.h"
+#include <array>
 #include <iostream>
 #include <cmath>
 
@@ -102,24 +103,19 @@ void Robot::updateLegPositions() {
 }
 
 vsg_vec3 Robot::getLegPosition(int legIndex) const {
-    // Position legs in proper hexapod layout - 3 pairs along body sides
-    const double bodyLength = config.bodySize.x;
-    const double bodyWidth = config.bodySize.y;
-    
-    // X positions for front, middle, rear leg pairs
-    std::vector<double> legXPositions = { 
-        -bodyLength * 0.3,   // front legs
-         0.0,                // middle legs  
-         bodyLength * 0.3    // rear legs
+    double halfWidth = config.bodySize.x * 0.5;
+    double halfHeight = config.bodySize.z * 0.5;
+    std::array<double, 3> legY = {
+        -config.bodySize.y * 0.3,
+         0.0,
+         config.bodySize.y * 0.3
     };
-    
-    int pairIndex = legIndex / 2;  // 0, 1, 2 for front, middle, rear
-    int side = (legIndex % 2 == 0) ? -1 : 1;  // even = left, odd = right
-    
-    double x = legXPositions[pairIndex];
-    double y = side * (bodyWidth * 0.5);  // at body edge
-    
-    return vsg_vec3(x, y, 0.0f);  // Z offset handled by attachment point
+    int pairIndex = legIndex / 2;
+    int sideSign = (legIndex % 2 == 0) ? -1 : 1;
+    double x = sideSign * halfWidth;
+    double y = legY[pairIndex];
+    double z = -halfHeight;
+    return vsg_vec3(x, y, z);
 }
 
 void Robot::applyForces() {

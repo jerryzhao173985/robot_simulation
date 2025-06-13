@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <iostream>
 #include <fstream>
+#include "PositionUtils.h"
 
 RobotController::RobotController(Robot* robot) 
     : robot(robot), controlMode(MANUAL), currentPathIndex(0) {
@@ -337,7 +338,7 @@ void RobotController::processSensorData(const std::vector<float>& sensorReadings
                 if (sensorReadings[i] < 2.0f) {
                     if (sensorReadings[i] < obstacleDistance) {
                         float angle = i * M_PI / 3.0f;
-                        obstacleDirection = vsg_vec3(std::cos(angle), 0, std::sin(angle));
+                        obstacleDirection = makePosition(std::cos(angle), 0.0f, std::sin(angle));
                         obstacleDistance = sensorReadings[i];
                     }
                     detectedObstacles.push_back(obstacleDirection * sensorReadings[i]);

@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <iostream>
 
+#include "PositionUtils.h"
+
 Terrain::Terrain(PhysicsWorld* physicsWorld, vsg::ref_ptr<vsg::Group> sceneGraph)
     : physicsWorld(physicsWorld), sceneGraph(sceneGraph) {
     
@@ -287,9 +289,10 @@ void Terrain::generateNormals() {
             
             // Calculate normal
             vsg::vec3 normal;
+            // X-gradient (east-west), Y-gradient (north-south), Z is vertical (up)
             normal.x = (hL - hR) / (2.0f * scale);
-            normal.y = 2.0f;
-            normal.z = (hD - hU) / (2.0f * scale);
+            normal.y = (hD - hU) / (2.0f * scale);
+            normal.z = 2.0f;
             
             normals[z * size + x] = vsg::normalize(normal);
         }
@@ -317,8 +320,8 @@ void Terrain::createMesh() {
             float height = getHeightAt(worldX, worldZ);
             
             vertices.push_back(worldX);
-            vertices.push_back(height);
             vertices.push_back(worldZ);
+            vertices.push_back(height);
             
             // Texture coordinates
             vertices.push_back(x / (float)(params.resolution - 1));
@@ -392,8 +395,8 @@ void Terrain::createPhysicsMesh() {
             float height = heightData[z * params.resolution + x];
             
             physicsVertices.push_back(worldX);
-            physicsVertices.push_back(height);
             physicsVertices.push_back(worldZ);
+            physicsVertices.push_back(height);
         }
     }
     
@@ -607,7 +610,7 @@ vsg::vec3 Terrain::getNormalAt(float x, float z) const {
     float tz = (z / scale) + size / 2.0f;
     
     if (tx < 0 || tx >= size - 1 || tz < 0 || tz >= size - 1) {
-        return vsg::vec3(0.0f, 1.0f, 0.0f);
+        return vsg::vec3(0.0f, 0.0f, 1.0f);
     }
     
     int x0 = (int)tx;
@@ -617,12 +620,12 @@ vsg::vec3 Terrain::getNormalAt(float x, float z) const {
         return normals[z0 * size + x0];
     }
     
-    return vsg::vec3(0.0f, 1.0f, 0.0f);
+    return vsg::vec3(0.0f, 0.0f, 1.0f);
 }
 
 float Terrain::getSlopeAt(float x, float z) const {
     vsg::vec3 normal = getNormalAt(x, z);
-    return 1.0f - normal.y;  // 0 = flat, 1 = vertical
+    return 1.0f - normal.z;  // 0 = flat, 1 = vertical
 }
 
 void Terrain::deform(const vsg::vec3& center, float radius, float amount) {
@@ -652,36 +655,41 @@ void Terrain::deform(const vsg::vec3& center, float radius, float amount) {
 void Terrain::addRamp(const vsg::vec3& start, const vsg::vec3& end, float width) {
     int size = params.resolution;
     float scale = params.size / (size - 1);
-    
-    vsg::vec3 dir = vsg::normalize(end - start);
-    vsg::vec3 perp(-dir.z, 0, dir.x);
-    float length = vsg::length(end - start);
-    
-    for (int z = 0; z < size; ++z) {
-        for (int x = 0; x < size; ++x) {
-            float px = (x - size/2) * scale;
-            float pz = (z - size/2) * scale;
-            vsg::vec3 p(px, 0, pz);
-            
-            // Project point onto ramp line
-            vsg::vec3 toPoint = p - start;
+
+    // Compute horizontal direction and perpendicular in X-Y plane
+    vsg::vec2 horizStart(start.x, start.y);
+    vsg::vec2 horizEnd(end.x, end.y);
+    vsg::vec2 diff = horizEnd - horizStart;
+    float length = vsg::length(diff);
+    vsg::vec2 dir = (length > 0.0f) ? (diff / length) : vsg::vec2(0.0f, 0.0f);
+    vsg::vec2 perp(-dir.y, dir.x);
+
+    for (int iz = 0; iz < size; ++iz) {
+        for (int ix = 0; ix < size; ++ix) {
+            float px = (ix - size / 2) * scale;
+            float py = (iz - size / 2) * scale;
+            vsg::vec2 p2d(px, py);
+
+            // Project point onto ramp line in horizontal plane
+            vsg::vec2 toPoint = p2d - horizStart;
             float alongRamp = vsg::dot(toPoint, dir);
             float perpDist = vsg::dot(toPoint, perp);
-            
-            if (alongRamp >= 0 && alongRamp <= length && std::abs(perpDist) <= width/2) {
+
+            if (alongRamp >= 0 && alongRamp <= length && std::abs(perpDist) <= width / 2) {
                 float t = alongRamp / length;
-                float targetHeight = start.y * (1.0f - t) + end.y * t;
-                
+                float targetHeight = start.z * (1.0f - t) + end.z * t;
+
                 // Smooth edges
-                float edgeFactor = 1.0f - (std::abs(perpDist) / (width/2));
+                float edgeFactor = 1.0f - (std::abs(perpDist) / (width / 2));
                 edgeFactor = edgeFactor * edgeFactor;
-                
-                heightData[z * size + x] = heightData[z * size + x] * (1.0f - edgeFactor) + 
-                                          targetHeight * edgeFactor;
+
+                heightData[iz * size + ix] =
+                    heightData[iz * size + ix] * (1.0f - edgeFactor) +
+                    targetHeight * edgeFactor;
             }
         }
     }
-    
+
     // Update mesh
     generateNormals();
     createMesh();

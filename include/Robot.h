@@ -2,6 +2,7 @@
 
 #ifdef USE_OPENGL_FALLBACK
     #include <cmath>
+    #include <vector>
     
     // Simple vector classes for fallback mode
     struct vec3 {
@@ -175,7 +176,7 @@ private:
         float lowerLegLength = 0.25f;
         float legRadius = 0.02f;
         float footRadius = 0.03f;
-        float legAttachOffset = 0.3f;                        // Match leg spacing
+        float legAttachOffset = 0.3f;                        // Match leg spacing (unused)
     } config;
     
     static constexpr int NUM_LEGS = 6;

@@ -3,6 +3,14 @@
         "__locale": "cpp",
         "string": "cpp",
         "string_view": "cpp",
-        "algorithm": "cpp"
+        "algorithm": "cpp",
+        "iostream": "cpp",
+        "thread": "cpp",
+        "csignal": "cpp",
+        "atomic": "cpp",
+        "cmath": "cpp",
+        "fstream": "cpp",
+        "random": "cpp",
+        "cstring": "cpp"
     }
 }

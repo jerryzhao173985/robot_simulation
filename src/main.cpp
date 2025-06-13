@@ -17,6 +17,8 @@
 #include <vsgXchange/all.h>
 #endif
 
+#include "PositionUtils.h"
+
 // Global flag for graceful shutdown
 std::atomic<bool> g_shouldExit{false};
 
@@ -53,6 +55,7 @@ public:
         sceneRoot = vsg::Group::create();
 #endif
         visualizer->setSceneRoot(sceneRoot);
+        visualizer->enableVSync(false);
 
         // Setup lighting
         setupLighting();
@@ -115,7 +118,7 @@ public:
 
         // Set initial navigation goal
         RobotController::NavigationGoal goal;
-        goal.position = vsg_vec3(10.0f, 0.0f, 10.0f);
+        goal.position = makePosition(10.0f, 0.0f, 10.0f);
         goal.speed = 1.0f;
         goal.tolerance = 0.5f;
         controller->setNavigationGoal(goal);
@@ -217,7 +220,7 @@ private:
             float size = 0.5f + (float)(rand() % 20) / 10.0f;
 
             physicsWorld->createBox(
-                vsg_vec3(x, z, height),
+                makePosition(x, height, z),
                 vsg_vec3(size, size, size),
                 10.0f
             );
@@ -225,8 +228,8 @@ private:
 
         // Add ramps and stairs
         terrain->addRamp(
-            vsg_vec3(-10.0f, -10.0f, 0.0f),
-            vsg_vec3(-5.0f, -10.0f, 2.0f),
+            makePosition(-10.0f, 0.0f, -10.0f),
+            makePosition(-5.0f, 2.0f, -10.0f),
             3.0f
         );
     }
@@ -247,16 +250,16 @@ private:
 
     void setRandomNavigationGoal() {
         RobotController::NavigationGoal goal;
-        goal.position = vsg_vec3(
-            (float)(rand() % 40 - 20),
-            0.0f,
-            (float)(rand() % 40 - 20)
-        );
+        {
+            float gx = (float)(rand() % 40 - 20);
+            float gy = (float)(rand() % 40 - 20);
+            goal.position = makePosition(gx, 0.0f, gy);
+        }
         goal.speed = 0.5f + (float)(rand() % 10) / 10.0f;
         goal.tolerance = 0.5f;
         controller->setNavigationGoal(goal);
 
-        std::cout << "New navigation goal: " << goal.position.x << ", " << goal.position.z << std::endl;
+        std::cout << "New navigation goal: " << goal.position.x << ", " << goal.position.y << std::endl;
     }
 
     void handleInput() {
