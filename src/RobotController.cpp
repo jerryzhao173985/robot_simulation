@@ -8,18 +8,26 @@
 RobotController::RobotController(Robot* robot) 
     : robot(robot), controlMode(MANUAL), currentPathIndex(0) {
     
-    // Initialize PID controllers
-    pitchController = {1.0f, 0.1f, 0.5f, 0.0f, 0.0f};
-    rollController = {1.0f, 0.1f, 0.5f, 0.0f, 0.0f};
-    yawController = {0.5f, 0.05f, 0.2f, 0.0f, 0.0f};
-    heightController = {2.0f, 0.2f, 1.0f, 0.0f, 0.0f};
-    
     // Initialize control input
-    currentInput.targetVelocity = vsg::vec3(0.0f);
+    currentInput.targetVelocity = vsg_vec3();
     currentInput.targetAngularVelocity = 0.0f;
     currentInput.jump = false;
     currentInput.crouch = false;
     currentInput.gaitType = 0;
+    
+    // Initialize navigation goal
+    currentGoal.position = vsg_vec3();
+    currentGoal.speed = 1.0f;
+    currentGoal.tolerance = 0.5f;
+    
+    // Initialize PID controllers
+    pitchController = {1.0f, 0.1f, 0.05f, 0.0f, 0.0f};
+    rollController = {1.0f, 0.1f, 0.05f, 0.0f, 0.0f};
+    yawController = {0.5f, 0.1f, 0.02f, 0.0f, 0.0f};
+    heightController = {2.0f, 0.2f, 0.1f, 0.0f, 0.0f};
+    
+    // Initialize obstacle detection
+    obstacleDirection = vsg_vec3();
 }
 
 RobotController::~RobotController() {
@@ -315,29 +323,25 @@ void RobotController::adaptToTerrain() {
 }
 
 void RobotController::processSensorData(const std::vector<float>& sensorReadings) {
-    // Process proximity sensors
-    obstacleDirection = vsg::vec3(0.0f);
-    obstacleDistance = 10.0f;
+    // Clear previous obstacles
+    detectedObstacles.clear();
     
-    for (int i = 0; i < 8 && i < sensorReadings.size(); ++i) {
-        float angle = i * M_PI / 4;
-        float distance = sensorReadings[i];
-        
-        if (distance < obstacleDistance) {
-            obstacleDistance = distance;
-            obstacleDirection = vsg::vec3(cos(angle), 0, sin(angle));
-        }
-        
-        // Store detected obstacles
-        if (distance < 5.0f) {
-            vsg::vec3 obstaclePos = robot->getPosition() + obstacleDirection * distance;
-            detectedObstacles.push_back(obstaclePos);
-        }
-    }
+    // Reset obstacle direction
+    obstacleDirection = vsg_vec3();
+    obstacleDistance = std::numeric_limits<float>::max();
     
-    // Limit stored obstacles
-    if (detectedObstacles.size() > 50) {
-        detectedObstacles.erase(detectedObstacles.begin(), detectedObstacles.begin() + 25);
+    // Simple obstacle detection based on proximity sensors
+    if (sensorReadings.size() >= 6) {
+        for (size_t i = 0; i < 6; ++i) {
+            if (sensorReadings[i] < 2.0f) { // Obstacle detected within 2 units
+                float angle = (float)i * M_PI / 3.0f; // 60-degree intervals
+                obstacleDirection = vsg_vec3(cos(angle), 0, sin(angle));
+                obstacleDistance = sensorReadings[i];
+                
+                // Add to detected obstacles list
+                detectedObstacles.push_back(obstacleDirection * sensorReadings[i]);
+            }
+        }
     }
 }
 

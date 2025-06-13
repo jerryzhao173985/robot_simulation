@@ -1,6 +1,55 @@
 #pragma once
 
+#ifdef USE_OPENGL_FALLBACK
+    #include <cmath>
+    #include <unordered_map>
+    
+    // Simple vector classes for fallback mode
+    struct vec3 {
+        float x, y, z;
+        vec3(float x = 0, float y = 0, float z = 0) : x(x), y(y), z(z) {}
+        vec3 operator+(const vec3& other) const { return vec3(x + other.x, y + other.y, z + other.z); }
+        vec3 operator-(const vec3& other) const { return vec3(x - other.x, y - other.y, z - other.z); }
+        vec3 operator*(float s) const { return vec3(x * s, y * s, z * s); }
+        float length() const { return std::sqrt(x*x + y*y + z*z); }
+        vec3 normalize() const { float l = length(); return l > 0 ? *this * (1.0f/l) : vec3(); }
+    };
+    
+    struct vec4 {
+        float x, y, z, w;
+        vec4(float x = 0, float y = 0, float z = 0, float w = 1) : x(x), y(y), z(z), w(w) {}
+    };
+    
+    using vsg_vec3 = vec3;
+    using vsg_vec4 = vec4;
+    
+    template<typename T>
+    struct ref_ptr {
+        T* ptr = nullptr;
+        ref_ptr() = default;
+        ref_ptr(T* p) : ptr(p) {}
+        T* operator->() { return ptr; }
+        const T* operator->() const { return ptr; }
+        T& operator*() { return *ptr; }
+        const T& operator*() const { return *ptr; }
+        operator bool() const { return ptr != nullptr; }
+    };
+    
+    class Group {
+    public:
+        std::vector<void*> children;
+        void addChild(void* child) { children.push_back(child); }
+    };
+    
+    class MatrixTransform {};
+    class Node {};
+    
+#else
 #include <vsg/all.h>
+    using vsg_vec3 = vsg::vec3;
+    using vsg_vec4 = vsg::vec4;
+#endif
+
 #include <ode/ode.h>
 #include <vector>
 #include <memory>
@@ -20,27 +69,45 @@ public:
     };
 
     struct TerrainParams {
-        float size = 100.0f;
-        int resolution = 256;
-        float maxHeight = 10.0f;
-        float roughness = 0.5f;
-        float frequency = 0.1f;
-        int octaves = 4;
-        float persistence = 0.5f;
-        float lacunarity = 2.0f;
+        int resolution;
+        float size;
+        float maxHeight;
+        float lacunarity;
+        int octaves;
+        float persistence;
+        float frequencyScale;
+        float vegetationDensity;
+        float roughness;          // Added missing field
+        float frequency;          // Added missing field
+        
+        TerrainParams() : 
+            resolution(256),
+            size(100.0f),
+            maxHeight(10.0f),
+            lacunarity(2.0f),
+            octaves(4),
+            persistence(0.5f),
+            frequencyScale(0.01f),
+            vegetationDensity(0.1f),
+            roughness(0.5f),
+            frequency(0.1f) {}
     };
 
     struct TerrainMaterial {
-        vsg::vec4 baseColor = vsg::vec4(0.4f, 0.5f, 0.3f, 1.0f);
-        vsg::vec4 rockColor = vsg::vec4(0.5f, 0.5f, 0.5f, 1.0f);
-        vsg::vec4 grassColor = vsg::vec4(0.2f, 0.6f, 0.2f, 1.0f);
-        vsg::vec4 sandColor = vsg::vec4(0.9f, 0.8f, 0.6f, 1.0f);
+        vsg_vec4 baseColor = vsg_vec4(0.4f, 0.5f, 0.3f, 1.0f);
+        vsg_vec4 rockColor = vsg_vec4(0.5f, 0.5f, 0.5f, 1.0f);
+        vsg_vec4 grassColor = vsg_vec4(0.2f, 0.6f, 0.2f, 1.0f);
+        vsg_vec4 sandColor = vsg_vec4(0.9f, 0.8f, 0.6f, 1.0f);
         float metallic = 0.0f;
         float roughnessValue = 0.9f;
         float slopeThreshold = 0.7f;
     };
 
+#ifdef USE_OPENGL_FALLBACK
+    Terrain(PhysicsWorld* physicsWorld, ref_ptr<Group> sceneGraph);
+#else
     Terrain(PhysicsWorld* physicsWorld, vsg::ref_ptr<vsg::Group> sceneGraph);
+#endif
     ~Terrain();
 
     void generate(TerrainType type, const TerrainParams& params = TerrainParams());
@@ -49,18 +116,18 @@ public:
     
     // Terrain queries
     float getHeightAt(float x, float z) const;
-    vsg::vec3 getNormalAt(float x, float z) const;
+    vsg_vec3 getNormalAt(float x, float z) const;
     float getSlopeAt(float x, float z) const;
     TerrainType getTypeAt(float x, float z) const;
     
     // Terrain modification
-    void deform(const vsg::vec3& center, float radius, float amount);
-    void smooth(const vsg::vec3& center, float radius, float strength);
-    void addObstacle(const vsg::vec3& position, const vsg::vec3& size);
-    void addRamp(const vsg::vec3& start, const vsg::vec3& end, float width);
+    void deform(const vsg_vec3& center, float radius, float amount);
+    void smooth(const vsg_vec3& center, float radius, float strength);
+    void addObstacle(const vsg_vec3& position, const vsg_vec3& size);
+    void addRamp(const vsg_vec3& start, const vsg_vec3& end, float width);
     
     // Visual customization
-    void setMaterial(const TerrainMaterial& material);
+    void setMaterial(const TerrainMaterial& mat) { material = mat; }
     void enableTexturing(bool enable) { texturingEnabled = enable; }
     void enableNormalMapping(bool enable) { normalMappingEnabled = enable; }
     void enableDetailTextures(bool enable) { detailTexturesEnabled = enable; }
@@ -76,7 +143,23 @@ public:
     void enableTrees(bool enable) { treesEnabled = enable; }
     void enableRocks(bool enable) { rocksEnabled = enable; }
     void setWindStrength(float strength) { windStrength = strength; }
-    void setWindDirection(const vsg::vec3& direction) { windDirection = direction; }
+    void setWindDirection(const vsg_vec3& direction) { windDirection = direction; }
+
+    // Terrain generation and access
+    void generate();
+    void generateHeightData();
+    void generateNormals();
+    void createMesh();
+    void createPhysicsMesh();
+    void applyTextures();
+    void enableWireframe();
+    
+    // Scene access
+#ifdef USE_OPENGL_FALLBACK
+    ref_ptr<Group> getTerrainNode();
+#else
+    vsg::ref_ptr<vsg::Group> getTerrainNode();
+#endif
 
 private:
     void generateFlat();
@@ -88,28 +171,34 @@ private:
     
     float noise(float x, float y) const;
     float fractalNoise(float x, float y, int octaves, float persistence) const;
-    void generateHeightData();
-    void generateNormals();
-    void createMesh();
-    void createPhysicsMesh();
     void createLODs();
     void placeVegetation();
     void applyErosion(int iterations);
     
     // Core components
     PhysicsWorld* physicsWorld;
+#ifdef USE_OPENGL_FALLBACK
+    ref_ptr<Group> sceneGraph;
+    ref_ptr<Group> terrainGroup;
+    ref_ptr<MatrixTransform> terrainTransform;
+#else
     vsg::ref_ptr<vsg::Group> sceneGraph;
     vsg::ref_ptr<vsg::Group> terrainGroup;
     vsg::ref_ptr<vsg::MatrixTransform> terrainTransform;
+#endif
     
     // Terrain data
     TerrainType currentType;
     TerrainParams params;
     TerrainMaterial material;
     std::vector<float> heightData;
-    std::vector<vsg::vec3> normals;
+    std::vector<vsg_vec3> normals;
     std::vector<float> vertices;
     std::vector<uint32_t> indices;
+    
+    // Physics-specific mesh data
+    std::vector<float> physicsVertices;
+    std::vector<int> physicsIndices;
     
     // Physics
     dGeomID terrainGeom;
@@ -122,17 +211,25 @@ private:
     bool normalMappingEnabled = true;
     bool detailTexturesEnabled = true;
     int lodLevels = 4;
+#ifdef USE_OPENGL_FALLBACK
+    std::vector<ref_ptr<Node>> lodNodes;
+#else
     std::vector<vsg::ref_ptr<vsg::Node>> lodNodes;
+#endif
     
     // Environmental features
     bool grassEnabled = true;
     bool treesEnabled = true;
     bool rocksEnabled = true;
     float windStrength = 0.5f;
-    vsg::vec3 windDirection = vsg::vec3(1.0f, 0.0f, 0.0f);
+    vsg_vec3 windDirection = vsg_vec3(1.0f, 0.0f, 0.0f);
+#ifdef USE_OPENGL_FALLBACK
+    std::vector<ref_ptr<MatrixTransform>> vegetation;
+#else
     std::vector<vsg::ref_ptr<vsg::MatrixTransform>> vegetation;
+#endif
     
     // Optimization
     mutable std::unordered_map<uint64_t, float> heightCache;
-    mutable std::unordered_map<uint64_t, vsg::vec3> normalCache;
+    mutable std::unordered_map<uint64_t, vsg_vec3> normalCache;
 };

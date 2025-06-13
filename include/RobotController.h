@@ -1,10 +1,38 @@
 #pragma once
 
+#ifdef USE_OPENGL_FALLBACK
+    #include <cmath>
+    
+    // Simple vector classes for fallback mode
+    struct vec3 {
+        float x, y, z;
+        vec3(float x = 0, float y = 0, float z = 0) : x(x), y(y), z(z) {}
+        vec3 operator+(const vec3& other) const { return vec3(x + other.x, y + other.y, z + other.z); }
+        vec3 operator-(const vec3& other) const { return vec3(x - other.x, y - other.y, z - other.z); }
+        vec3 operator*(float s) const { return vec3(x * s, y * s, z * s); }
+        float length() const { return std::sqrt(x*x + y*y + z*z); }
+        vec3 normalize() const { float l = length(); return l > 0 ? *this * (1.0f/l) : vec3(); }
+    };
+    
+    struct quat {
+        float x, y, z, w;
+        quat(float x = 0, float y = 0, float z = 0, float w = 1) : x(x), y(y), z(z), w(w) {}
+    };
+    
+    using vsg_vec3 = vec3;
+    using vsg_quat = quat;
+    
+#else
 #include <vsg/all.h>
+    using vsg_vec3 = vsg::vec3;
+    using vsg_quat = vsg::quat;
+#endif
+
 #include <vector>
 #include <memory>
 #include <functional>
 #include <map>
+#include <algorithm>
 
 class Robot;
 
@@ -18,7 +46,7 @@ public:
     };
 
     struct ControlInput {
-        vsg::vec3 targetVelocity;
+        vsg_vec3 targetVelocity;
         float targetAngularVelocity;
         bool jump;
         bool crouch;
@@ -26,8 +54,8 @@ public:
     };
 
     struct NavigationGoal {
-        vsg::vec3 position;
-        vsg::quat orientation;
+        vsg_vec3 position;
+        vsg_quat orientation;
         float speed;
         float tolerance;
     };
@@ -63,7 +91,7 @@ public:
     
     // Sensor processing
     void processSensorData(const std::vector<float>& sensorReadings);
-    vsg::vec3 getPerceivedObstacleDirection() const { return obstacleDirection; }
+    vsg_vec3 getPerceivedObstacleDirection() const { return obstacleDirection; }
     
     // State queries
     bool isBalanced() const;
@@ -87,7 +115,7 @@ private:
     void updatePerformanceMetrics(double deltaTime);
     float evaluatePerformance();
     bool hasNavigationGoal() const;
-    vsg::vec3 eulerFromQuat(const vsg::quat& q) const;
+    vsg_vec3 eulerFromQuat(const vsg_quat& q) const;
     
     // PID controllers for stability
     struct PIDController {
@@ -103,7 +131,7 @@ private:
     NavigationGoal currentGoal;
     
     // Path planning
-    std::vector<vsg::vec3> navigationPath;
+    std::vector<vsg_vec3> navigationPath;
     size_t currentPathIndex;
     float pathFollowingSpeed;
     
@@ -119,9 +147,9 @@ private:
     bool dynamicStabilityEnabled = true;
     
     // Sensor processing
-    vsg::vec3 obstacleDirection;
+    vsg_vec3 obstacleDirection;
     float obstacleDistance;
-    std::vector<vsg::vec3> detectedObstacles;
+    std::vector<vsg_vec3> detectedObstacles;
     
     // Stability control
     PIDController pitchController;

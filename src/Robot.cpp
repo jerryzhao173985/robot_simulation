@@ -1,542 +1,232 @@
 #include "Robot.h"
-#include <cmath>
-#include <algorithm>
 #include <iostream>
 
-Robot::Robot(dWorldID world, dSpaceID space, vsg::ref_ptr<vsg::Group> sceneGraph)
-    : world(world), space(space), sceneGraph(sceneGraph) {
+Robot::Robot(dWorldID world, dSpaceID space, 
+#ifdef USE_OPENGL_FALLBACK
+             ref_ptr<Group> sceneGraph
+#else
+             vsg::ref_ptr<vsg::Group> sceneGraph
+#endif
+)
+    : sceneGraph(sceneGraph) {
     
-    // Create robot group
-    robotGroup = vsg::Group::create();
-    sceneGraph->addChild(robotGroup);
+    // Initialize physics
+    bodyId = dBodyCreate(world);
     
-    // Initialize robot components
     createBody();
     createLegs();
-    createSensors();
     
-    // Setup initial state
-    targetVelocity = vsg::vec3(0.0f, 0.0f, 0.0f);
-    targetAngularVelocity = 0.0f;
-    gaitPhase = 0.0f;
-    energyConsumption = 0.0f;
+    // Create collision geometry
+    dGeomID geom = dCreateBox(space, config.bodySize.x, config.bodySize.y, config.bodySize.z);
+    dGeomSetBody(geom, bodyId);
+    
+    // Initialize visual representation
+    createVisualModel();
+    
+    std::cout << "Robot initialized with physics and visual components" << std::endl;
 }
 
 Robot::~Robot() {
-    // Cleanup ODE bodies and geometries
-    if (bodyGeom) dGeomDestroy(bodyGeom);
-    if (bodyID) dBodyDestroy(bodyID);
+    // Clean up physics bodies
+    if (bodyId) dBodyDestroy(bodyId);
     
-    for (auto& leg : legs) {
-        for (auto& segment : leg.segments) {
-            if (segment.joint) dJointDestroy(segment.joint);
-            if (segment.geom) dGeomDestroy(segment.geom);
-            if (segment.body) dBodyDestroy(segment.body);
-        }
+    // Clean up leg bodies
+    for (auto body : legBodies) {
+        if (body) dBodyDestroy(body);
+    }
+    
+    // Clean up joints
+    for (auto joint : legJoints) {
+        if (joint) dJointDestroy(joint);
     }
 }
 
 void Robot::createBody() {
-    // Create main body
-    bodyID = dBodyCreate(world);
-    
-    // Body dimensions
-    const float bodyLength = 2.0f;
-    const float bodyWidth = 1.5f;
-    const float bodyHeight = 0.4f;
-    const float bodyMass = 10.0f;
-    
-    // Set body mass
-    dMassSetBoxTotal(&mass, bodyMass, bodyLength, bodyHeight, bodyWidth);
-    dBodySetMass(bodyID, &mass);
-    
-    // Create body geometry
-    bodyGeom = dCreateBox(space, bodyLength, bodyHeight, bodyWidth);
-    dGeomSetBody(bodyGeom, bodyID);
+    // Create main body mass
+    dMass mass;
+    dMassSetBoxTotal(&mass, 5.0f, config.bodySize.x, config.bodySize.y, config.bodySize.z);
+    dBodySetMass(bodyId, &mass);
     
     // Set initial position
-    dBodySetPosition(bodyID, 0, 2.0f, 0);
+    dBodySetPosition(bodyId, 0.0f, 2.0f, 0.0f);
     
-    // Create visual representation
-    bodyTransform = vsg::MatrixTransform::create();
+    // Initialize leg containers
+    legBodies.resize(6);
+    legJoints.resize(6);
     
-    // Create material
-    material = vsg::PhongMaterialValue::create();
-    material->diffuse = bodyColor;
-    material->specular = vsg::vec4(1.0f, 1.0f, 1.0f, 1.0f);
-    material->shininess = 128.0f * (1.0f - roughnessValue);
-    
-    // Create body geometry
-    auto builder = vsg::Builder::create();
-    auto box = vsg::Box::create();
-    box->min = vsg::vec3(-bodyLength/2, -bodyHeight/2, -bodyWidth/2);
-    box->max = vsg::vec3(bodyLength/2, bodyHeight/2, bodyWidth/2);
-    
-    vsg::GeometryInfo geomInfo;
-    geomInfo.box = box;
-    geomInfo.color = bodyColor;
-    
-    auto stateGroup = vsg::StateGroup::create();
-    auto phongMaterial = vsg::PhongMaterial::create();
-    phongMaterial->value() = material;
-    stateGroup->add(vsg::BindGraphicsPipeline::create(builder->createGraphicsPipeline(phongMaterial)));
-    
-    auto bodyNode = builder->createBox(geomInfo);
-    stateGroup->addChild(bodyNode);
-    bodyTransform->addChild(stateGroup);
-    
-    robotGroup->addChild(bodyTransform);
-    
-    // Add decorative elements
-    addBodyDecorations();
+    std::cout << "Robot physics body created with mass 5.0kg" << std::endl;
 }
 
 void Robot::createLegs() {
-    // Hexapod configuration
-    const float legSpacing = 0.7f;
-    const float legOffsetX = 0.8f;
+    // Simplified leg creation - just initialize the containers
+    legBodies.resize(6);
+    legJoints.resize(6);
     
-    // Define attachment points for 6 legs
-    vsg::vec3 attachmentPoints[NUM_LEGS] = {
-        vsg::vec3(legOffsetX, 0, legSpacing),      // Front right
-        vsg::vec3(legOffsetX, 0, -legSpacing),     // Front left
-        vsg::vec3(0, 0, legSpacing),               // Middle right
-        vsg::vec3(0, 0, -legSpacing),              // Middle left
-        vsg::vec3(-legOffsetX, 0, legSpacing),     // Back right
-        vsg::vec3(-legOffsetX, 0, -legSpacing)     // Back left
-    };
-    
-    for (int i = 0; i < NUM_LEGS; ++i) {
-        legs[i].attachmentPoint = attachmentPoints[i];
-        legs[i].currentAngle = 0;
-        legs[i].targetAngle = 0;
-        legs[i].isGrounded = false;
-        
-        createLegSegments(i);
-    }
-}
-
-void Robot::createLegSegments(int legIndex) {
-    auto& leg = legs[legIndex];
-    
-    // Segment dimensions
-    const float segmentLengths[SEGMENTS_PER_LEG] = {0.3f, 0.5f, 0.4f};
-    const float segmentRadius = 0.05f;
-    const float segmentMass = 0.2f;
-    
-    dBodyID prevBody = bodyID;
-    vsg::vec3 currentPos = leg.attachmentPoint;
-    
-    for (int i = 0; i < SEGMENTS_PER_LEG; ++i) {
-        LegSegment segment;
-        segment.length = segmentLengths[i];
-        segment.radius = segmentRadius;
-        
-        // Create ODE body
-        segment.body = dBodyCreate(world);
-        
-        // Set mass
-        dMass segMass;
-        dMassSetCylinderTotal(&segMass, segmentMass, 3, segmentRadius, segment.length);
-        dBodySetMass(segment.body, &segMass);
-        
-        // Create geometry
-        segment.geom = dCreateCylinder(space, segmentRadius, segment.length);
-        dGeomSetBody(segment.geom, segment.body);
-        
-        // Position segment
-        float angle = (i == 0) ? -M_PI/4 : -M_PI/3;
-        vsg::vec3 offset(0, -segment.length * sin(angle) / 2, 0);
-        currentPos += offset;
-        
-        const dReal* bodyPos = dBodyGetPosition(bodyID);
-        dBodySetPosition(segment.body, 
-            bodyPos[0] + currentPos.x,
-            bodyPos[1] + currentPos.y,
-            bodyPos[2] + currentPos.z);
-        
-        // Create joint
-        if (i == 0) {
-            // Hip joint - 3 DOF
-            segment.joint = dJointCreateBall(world, 0);
-            dJointAttach(segment.joint, prevBody, segment.body);
-            dJointSetBallAnchor(segment.joint,
-                bodyPos[0] + leg.attachmentPoint.x,
-                bodyPos[1] + leg.attachmentPoint.y,
-                bodyPos[2] + leg.attachmentPoint.z);
-        } else {
-            // Knee/ankle joint - 1 DOF
-            segment.joint = dJointCreateHinge(world, 0);
-            dJointAttach(segment.joint, prevBody, segment.body);
-            
-            const dReal* prevPos = dBodyGetPosition(prevBody);
-            dJointSetHingeAnchor(segment.joint,
-                prevPos[0], prevPos[1] - segmentLengths[i-1]/2, prevPos[2]);
-            dJointSetHingeAxis(segment.joint, 0, 0, 1);
-            
-            // Set joint limits
-            dJointSetHingeParam(segment.joint, dParamLoStop, -M_PI/2);
-            dJointSetHingeParam(segment.joint, dParamHiStop, M_PI/2);
-        }
-        
-        // Create visual
-        segment.transform = vsg::MatrixTransform::create();
-        
-        auto builder = vsg::Builder::create();
-        auto cylinder = vsg::Cylinder::create();
-        cylinder->radius = segmentRadius;
-        cylinder->height = segment.length;
-        
-        vsg::GeometryInfo geomInfo;
-        geomInfo.cylinder = cylinder;
-        geomInfo.color = vsg::vec4(0.3f, 0.3f, 0.3f, 1.0f);
-        
-        auto segmentNode = builder->createCylinder(geomInfo);
-        segment.transform->addChild(segmentNode);
-        robotGroup->addChild(segment.transform);
-        
-        leg.segments.push_back(segment);
-        prevBody = segment.body;
-        currentPos.y -= segment.length * sin(angle);
-    }
-}
-
-void Robot::createSensors() {
-    // Add proximity sensors
-    for (int i = 0; i < 8; ++i) {
-        Sensor sensor;
-        sensor.type = Sensor::PROXIMITY;
-        float angle = i * M_PI / 4;
-        sensor.position = vsg::vec3(cos(angle) * 1.2f, 0.2f, sin(angle) * 1.2f);
-        sensor.orientation = vsg::vec3(cos(angle), 0, sin(angle));
-        sensor.range = 5.0f;
-        sensor.currentValue = 0.0f;
-        sensors.push_back(sensor);
-    }
-    
-    // Add gyroscope
-    Sensor gyro;
-    gyro.type = Sensor::GYROSCOPE;
-    gyro.position = vsg::vec3(0, 0, 0);
-    sensors.push_back(gyro);
-    
-    // Add accelerometer
-    Sensor accel;
-    accel.type = Sensor::ACCELEROMETER;
-    accel.position = vsg::vec3(0, 0, 0);
-    sensors.push_back(accel);
-    
-    // Add contact sensors for each foot
-    for (int i = 0; i < NUM_LEGS; ++i) {
-        Sensor contact;
-        contact.type = Sensor::CONTACT;
-        contact.position = legs[i].attachmentPoint;
-        sensors.push_back(contact);
+    // Create simple leg bodies (this would be expanded with proper physics)
+    for (int i = 0; i < 6; ++i) {
+        // For now, just set to nullptr - will be implemented later
+        legBodies[i] = nullptr;
+        legJoints[i] = nullptr;
     }
 }
 
 void Robot::update(double deltaTime) {
-    updatePhysics(deltaTime);
-    updateGait(gaitPhase);
-    detectGround();
+    // Basic update - simplified version
+    updateLegPositions();
+    applyForces();
+    maintainBalance();
     
-    if (stabilizationEnabled) {
-        stabilize();
+    // Update visual transform to match physics body
+#ifndef USE_OPENGL_FALLBACK
+    if (robotTransform && bodyId) {
+        const dReal* pos = dBodyGetPosition(bodyId);
+        const dReal* rot = dBodyGetRotation(bodyId);
+        
+        vsg::dmat4 matrix;
+        matrix[0][0] = rot[0]; matrix[0][1] = rot[1]; matrix[0][2] = rot[2]; matrix[0][3] = 0;
+        matrix[1][0] = rot[4]; matrix[1][1] = rot[5]; matrix[1][2] = rot[6]; matrix[1][3] = 0;
+        matrix[2][0] = rot[8]; matrix[2][1] = rot[9]; matrix[2][2] = rot[10]; matrix[2][3] = 0;
+        matrix[3][0] = pos[0]; matrix[3][1] = pos[1]; matrix[3][2] = pos[2]; matrix[3][3] = 1;
+        
+        robotTransform->matrix = matrix;
     }
-    
-    updateVisuals();
-    
-    // Update energy consumption
-    float powerUsage = 0.0f;
-    for (const auto& leg : legs) {
-        for (const auto& segment : leg.segments) {
-            if (segment.joint) {
-                // Simple power model based on joint velocity
-                const dReal* vel = dBodyGetAngularVel(segment.body);
-                powerUsage += vsg::length(vsg::vec3(vel[0], vel[1], vel[2])) * 2.0f;
-            }
-        }
-    }
-    energyConsumption = powerUsage;
-    
-    gaitPhase += gaitSpeed * deltaTime;
-    if (gaitPhase > 2 * M_PI) {
-        gaitPhase -= 2 * M_PI;
-    }
+#endif
 }
 
-void Robot::updatePhysics(double deltaTime) {
+void Robot::updateLegPositions() {
+    // Simplified leg position updates
+    // This would contain the actual leg movement logic
+}
+
+vsg_vec3 Robot::getLegPosition(int legIndex) const {
+    // Position legs around the body perimeter
+    float angle = legIndex * 60.0f * M_PI / 180.0f;  // 60 degrees apart
+    float radius = config.legAttachOffset;
+    return vsg_vec3(cos(angle) * radius, 0.0f, sin(angle) * radius);
+}
+
+void Robot::applyForces() {
     // Apply movement forces
     if (vsg::length(targetVelocity) > 0.01f || std::abs(targetAngularVelocity) > 0.01f) {
-        const dReal* currentVel = dBodyGetLinearVel(bodyID);
-        vsg::vec3 velError = targetVelocity - vsg::vec3(currentVel[0], currentVel[1], currentVel[2]);
+        const dReal* currentVel = dBodyGetLinearVel(bodyId);
+        vsg_vec3 velError = targetVelocity - vsg_vec3(currentVel[0], currentVel[1], currentVel[2]);
         
         // Apply force to reach target velocity
-        dBodyAddForce(bodyID, 
+        dBodyAddForce(bodyId, 
             velError.x * 50.0f,
             0,
             velError.z * 50.0f);
         
         // Apply torque for rotation
-        dBodyAddTorque(bodyID, 0, targetAngularVelocity * 20.0f, 0);
+        dBodyAddTorque(bodyId, 0, targetAngularVelocity * 20.0f, 0);
     }
 }
 
-void Robot::updateGait(double time) {
-    // Tripod gait pattern for hexapod
-    const int gaitPattern[2][3] = {{0, 3, 4}, {1, 2, 5}};
-    
-    for (int group = 0; group < 2; ++group) {
-        float phaseOffset = group * M_PI;
-        float liftPhase = sin(time + phaseOffset);
-        
-        for (int i = 0; i < 3; ++i) {
-            int legIndex = gaitPattern[group][i];
-            auto& leg = legs[legIndex];
-            
-            // Calculate target foot position
-            float stepX = strideLength * cos(time + phaseOffset);
-            float stepY = (liftPhase > 0) ? stepHeight * liftPhase : 0;
-            
-            vsg::vec3 targetPos = leg.attachmentPoint + vsg::vec3(stepX, -1.2f + stepY, 0);
-            
-            // Apply inverse kinematics
-            calculateInverseKinematics(legIndex, targetPos);
-        }
-    }
-}
-
-void Robot::calculateInverseKinematics(int legIndex, const vsg::vec3& targetPos) {
-    auto& leg = legs[legIndex];
-    
-    // Simplified IK for demonstration
-    const dReal* bodyPos = dBodyGetPosition(bodyID);
-    vsg::vec3 bodyPosition(bodyPos[0], bodyPos[1], bodyPos[2]);
-    vsg::vec3 relativeTarget = targetPos - bodyPosition;
-    
-    // Calculate joint angles (simplified)
-    float distance = vsg::length(relativeTarget);
-    float angle1 = atan2(relativeTarget.z, relativeTarget.x);
-    float angle2 = asin(relativeTarget.y / distance);
-    
-    // Apply to first segment (hip)
-    if (!leg.segments.empty() && leg.segments[0].joint) {
-        // Apply motor forces to achieve target angles
-        dJointAddTorques(leg.segments[0].joint, angle1 * 10.0f, angle2 * 10.0f, 0);
-    }
-}
-
-void Robot::detectGround() {
-    // Check contact for each leg
-    for (int i = 0; i < NUM_LEGS; ++i) {
-        legs[i].isGrounded = false;
-        
-        if (!legs[i].segments.empty()) {
-            const auto& foot = legs[i].segments.back();
-            
-            // Simple ground detection using position
-            const dReal* pos = dBodyGetPosition(foot.body);
-            if (pos[1] < foot.length/2 + 0.1f) {
-                legs[i].isGrounded = true;
-            }
-        }
-    }
-}
-
-void Robot::stabilize() {
+void Robot::maintainBalance() {
     // Get body orientation
-    const dReal* q = dBodyGetQuaternion(bodyID);
-    vsg::quat orientation(q[1], q[2], q[3], q[0]);
+    const dReal* q = dBodyGetQuaternion(bodyId);
+    vsg_quat orientation(q[1], q[2], q[3], q[0]);
     
-    // Calculate pitch and roll
-    vsg::vec3 euler = eulerAnglesFromQuat(orientation);
-    float pitch = euler.x;
-    float roll = euler.z;
+    // Calculate Euler angles for stabilization
+    vsg_vec3 euler = eulerAnglesFromQuat(orientation);
+    float roll = euler.x;
+    float pitch = euler.z;
     
     // Apply corrective torques
-    dBodyAddTorque(bodyID, -pitch * 50.0f, 0, -roll * 50.0f);
-    
-    // Adjust leg positions for balance
-    int groundedCount = 0;
-    for (const auto& leg : legs) {
-        if (leg.isGrounded) groundedCount++;
-    }
-    
-    // Ensure at least 3 legs are grounded for stability
-    if (groundedCount < 3) {
-        // Emergency stabilization - lower body
-        dBodyAddForce(bodyID, 0, -20.0f, 0);
-    }
-}
-
-void Robot::updateVisuals() {
-    // Update body transform
-    const dReal* pos = dBodyGetPosition(bodyID);
-    const dReal* rot = dBodyGetRotation(bodyID);
-    
-    vsg::dmat4 matrix;
-    matrix[0][0] = rot[0]; matrix[0][1] = rot[1]; matrix[0][2] = rot[2]; matrix[0][3] = 0;
-    matrix[1][0] = rot[4]; matrix[1][1] = rot[5]; matrix[1][2] = rot[6]; matrix[1][3] = 0;
-    matrix[2][0] = rot[8]; matrix[2][1] = rot[9]; matrix[2][2] = rot[10]; matrix[2][3] = 0;
-    matrix[3][0] = pos[0]; matrix[3][1] = pos[1]; matrix[3][2] = pos[2]; matrix[3][3] = 1;
-    
-    bodyTransform->matrix = matrix;
-    
-    // Update leg transforms
-    for (auto& leg : legs) {
-        for (auto& segment : leg.segments) {
-            const dReal* segPos = dBodyGetPosition(segment.body);
-            const dReal* segRot = dBodyGetRotation(segment.body);
-            
-            vsg::dmat4 segMatrix;
-            segMatrix[0][0] = segRot[0]; segMatrix[0][1] = segRot[1]; segMatrix[0][2] = segRot[2]; segMatrix[0][3] = 0;
-            segMatrix[1][0] = segRot[4]; segMatrix[1][1] = segRot[5]; segMatrix[1][2] = segRot[6]; segMatrix[1][3] = 0;
-            segMatrix[2][0] = segRot[8]; segMatrix[2][1] = segRot[9]; segMatrix[2][2] = segRot[10]; segMatrix[2][3] = 0;
-            segMatrix[3][0] = segPos[0]; segMatrix[3][1] = segPos[1]; segMatrix[3][2] = segPos[2]; segMatrix[3][3] = 1;
-            
-            segment.transform->matrix = segMatrix;
-        }
-    }
-}
-
-void Robot::applyControl(const std::vector<float>& motorCommands) {
-    // Apply motor commands to joints
-    size_t commandIndex = 0;
-    
-    for (auto& leg : legs) {
-        for (auto& segment : leg.segments) {
-            if (segment.joint && commandIndex < motorCommands.size()) {
-                // Apply torque based on command
-                float torque = motorCommands[commandIndex] * 10.0f;
-                dJointAddTorques(segment.joint, torque, 0, 0);
-                commandIndex++;
-            }
-        }
-    }
-    
-    // Update target velocity from commands
-    if (motorCommands.size() >= 2) {
-        targetVelocity.x = motorCommands[motorCommands.size() - 2] * moveSpeed;
-        targetVelocity.z = motorCommands[motorCommands.size() - 1] * moveSpeed;
-    }
+    dBodyAddTorque(bodyId, -pitch * 50.0f, 0, -roll * 50.0f);
 }
 
 void Robot::reset() {
     // Reset position and orientation
-    dBodySetPosition(bodyID, 0, 2.0f, 0);
-    dBodySetLinearVel(bodyID, 0, 0, 0);
-    dBodySetAngularVel(bodyID, 0, 0, 0);
+    dBodySetPosition(bodyId, 0, 2.0f, 0);
+    dBodySetLinearVel(bodyId, 0, 0, 0);
+    dBodySetAngularVel(bodyId, 0, 0, 0);
     
     dQuaternion q;
     dQSetIdentity(q);
-    dBodySetQuaternion(bodyID, q);
-    
-    // Reset legs
-    for (auto& leg : legs) {
-        leg.currentAngle = 0;
-        leg.targetAngle = 0;
-        leg.isGrounded = false;
-        
-        for (auto& segment : leg.segments) {
-            dBodySetLinearVel(segment.body, 0, 0, 0);
-            dBodySetAngularVel(segment.body, 0, 0, 0);
-        }
-    }
+    dBodySetQuaternion(bodyId, q);
     
     // Reset state
-    gaitPhase = 0;
-    energyConsumption = 0;
-    targetVelocity = vsg::vec3(0, 0, 0);
+    targetVelocity = vsg_vec3(0, 0, 0);
     targetAngularVelocity = 0;
 }
 
-vsg::vec3 Robot::getPosition() const {
-    const dReal* pos = dBodyGetPosition(bodyID);
-    return vsg::vec3(pos[0], pos[1], pos[2]);
+vsg_vec3 Robot::getPosition() const {
+    const dReal* pos = dBodyGetPosition(bodyId);
+    return vsg_vec3(pos[0], pos[1], pos[2]);
 }
 
-vsg::vec3 Robot::getVelocity() const {
-    const dReal* vel = dBodyGetLinearVel(bodyID);
-    return vsg::vec3(vel[0], vel[1], vel[2]);
+vsg_vec3 Robot::getVelocity() const {
+    const dReal* vel = dBodyGetLinearVel(bodyId);
+    return vsg_vec3(vel[0], vel[1], vel[2]);
 }
 
-vsg::quat Robot::getOrientation() const {
-    const dReal* q = dBodyGetQuaternion(bodyID);
-    return vsg::quat(q[1], q[2], q[3], q[0]);
+vsg_quat Robot::getOrientation() const {
+    const dReal* q = dBodyGetQuaternion(bodyId);
+    return vsg_quat(q[1], q[2], q[3], q[0]);
+}
+
+bool Robot::isStable() const {
+    // Simple stability check based on orientation
+    vsg_quat orientation = getOrientation();
+    vsg_vec3 euler = eulerAnglesFromQuat(orientation);
+    
+    return std::abs(euler.x) < 0.5f && std::abs(euler.z) < 0.5f;
+}
+
+void Robot::setBodyColor(const vsg_vec4& color) {
+    bodyColor = color;
+}
+
+void Robot::applyControl(const std::vector<float>& motorCommands) {
+    // Simplified control application
+    // This would apply motor commands to the leg joints
+    // For now, just store the commands for future use
+    if (motorCommands.size() >= 6) {
+        // Apply some basic movement based on motor commands
+        // This is a placeholder implementation
+        float avgCommand = 0.0f;
+        for (size_t i = 0; i < std::min(motorCommands.size(), size_t(6)); ++i) {
+            avgCommand += motorCommands[i];
+        }
+        avgCommand /= 6.0f;
+        
+        // Use average command to influence target velocity
+        targetVelocity.x = avgCommand * 2.0f;  // Scale as needed
+    }
 }
 
 std::vector<float> Robot::getSensorReadings() const {
+    // Return simplified sensor readings
     std::vector<float> readings;
     
-    for (const auto& sensor : sensors) {
-        readings.push_back(sensor.currentValue);
-    }
+    // Add position as sensor data
+    vsg_vec3 pos = getPosition();
+    readings.push_back(pos.x);
+    readings.push_back(pos.y);
+    readings.push_back(pos.z);
+    
+    // Add velocity as sensor data
+    vsg_vec3 vel = getVelocity();
+    readings.push_back(vel.x);
+    readings.push_back(vel.y);
+    readings.push_back(vel.z);
+    
+    // Add orientation as sensor data
+    vsg_quat orient = getOrientation();
+    readings.push_back(orient.x);
+    readings.push_back(orient.y);
+    readings.push_back(orient.z);
+    readings.push_back(orient.w);
+    
+    // Add stability as sensor reading
+    readings.push_back(isStable() ? 1.0f : 0.0f);
     
     return readings;
 }
 
-bool Robot::isStable() const {
-    // Check if at least 3 legs are grounded
-    int groundedCount = 0;
-    for (const auto& leg : legs) {
-        if (leg.isGrounded) groundedCount++;
-    }
-    
-    // Check body tilt
-    vsg::quat orientation = getOrientation();
-    vsg::vec3 euler = eulerAnglesFromQuat(orientation);
-    
-    return groundedCount >= 3 && 
-           std::abs(euler.x) < 0.5f && 
-           std::abs(euler.z) < 0.5f;
-}
-
-void Robot::setBodyColor(const vsg::vec4& color) {
-    bodyColor = color;
-    if (material) {
-        material->diffuse = color;
-    }
-}
-
-void Robot::addBodyDecorations() {
-    // Add eyes
-    auto builder = vsg::Builder::create();
-    
-    for (int i = -1; i <= 1; i += 2) {
-        auto eyeTransform = vsg::MatrixTransform::create();
-        eyeTransform->matrix = vsg::translate(0.9f, 0.15f, i * 0.3f);
-        
-        auto sphere = vsg::Sphere::create();
-        sphere->radius = 0.08f;
-        
-        vsg::GeometryInfo geomInfo;
-        geomInfo.sphere = sphere;
-        geomInfo.color = vsg::vec4(1.0f, 0.0f, 0.0f, 1.0f);
-        
-        auto eye = builder->createSphere(geomInfo);
-        eyeTransform->addChild(eye);
-        bodyTransform->addChild(eyeTransform);
-    }
-    
-    // Add antenna
-    auto antennaTransform = vsg::MatrixTransform::create();
-    antennaTransform->matrix = vsg::translate(1.0f, 0.3f, 0.0f);
-    
-    auto cylinder = vsg::Cylinder::create();
-    cylinder->radius = 0.02f;
-    cylinder->height = 0.3f;
-    
-    vsg::GeometryInfo antennaInfo;
-    antennaInfo.cylinder = cylinder;
-    antennaInfo.color = vsg::vec4(0.7f, 0.7f, 0.7f, 1.0f);
-    
-    auto antenna = builder->createCylinder(antennaInfo);
-    antennaTransform->addChild(antenna);
-    bodyTransform->addChild(antennaTransform);
-}
-
-vsg::vec3 Robot::eulerAnglesFromQuat(const vsg::quat& q) const {
-    vsg::vec3 euler;
+vsg_vec3 Robot::eulerAnglesFromQuat(const vsg_quat& q) const {
+    vsg_vec3 euler;
     
     // Roll (x-axis rotation)
     double sinr_cosp = 2 * (q.w * q.x + q.y * q.z);
@@ -557,3 +247,93 @@ vsg::vec3 Robot::eulerAnglesFromQuat(const vsg::quat& q) const {
     
     return euler;
 }
+
+void Robot::createVisualModel() {
+#ifndef USE_OPENGL_FALLBACK
+    robotTransform = vsg::MatrixTransform::create();
+    
+    try {
+        // Create builder
+        auto builder = vsg::Builder::create();
+        
+        // Create robot body
+        vsg::GeometryInfo bodyGeomInfo;
+        vsg::StateInfo bodyStateInfo;
+        
+        bodyGeomInfo.dx = vsg::vec3(config.bodySize.x, 0.0f, 0.0f);
+        bodyGeomInfo.dy = vsg::vec3(0.0f, config.bodySize.y, 0.0f);
+        bodyGeomInfo.dz = vsg::vec3(0.0f, 0.0f, config.bodySize.z);
+        bodyGeomInfo.color = vsg::vec4(bodyColor.x, bodyColor.y, bodyColor.z, bodyColor.w);
+        
+        auto bodyNode = builder->createBox(bodyGeomInfo, bodyStateInfo);
+        if (bodyNode) {
+            robotTransform->addChild(bodyNode);
+            std::cout << "Created robot body box" << std::endl;
+        }
+        
+        // Create legs as spheres
+        legTransforms.resize(6);
+        for (int i = 0; i < 6; ++i) {
+            auto legTransform = vsg::MatrixTransform::create();
+            auto legPosition = getLegPosition(i);
+            legTransform->matrix = vsg::translate(legPosition.x, -config.bodySize.y/2 - config.footRadius, legPosition.z);
+            
+            vsg::GeometryInfo legGeomInfo;
+            vsg::StateInfo legStateInfo;
+            
+            legGeomInfo.dx = vsg::vec3(config.footRadius, 0.0f, 0.0f);
+            legGeomInfo.dy = vsg::vec3(0.0f, config.footRadius, 0.0f);
+            legGeomInfo.dz = vsg::vec3(0.0f, 0.0f, config.footRadius);
+            legGeomInfo.color = vsg::vec4(1.0f, 1.0f, 0.0f, 1.0f);  // Yellow feet
+            
+            auto legNode = builder->createSphere(legGeomInfo, legStateInfo);
+            if (legNode) {
+                legTransform->addChild(legNode);
+                robotTransform->addChild(legTransform);
+                std::cout << "Created leg " << i << std::endl;
+            }
+            
+            legTransforms[i] = legTransform;
+        }
+        
+        std::cout << "Robot visual model created successfully" << std::endl;
+        
+    } catch (const std::exception& e) {
+        std::cout << "VSG creation failed: " << e.what() << std::endl;
+        
+        // Ultra-simple fallback - just create empty transforms
+        legTransforms.resize(6);
+        for (int i = 0; i < 6; ++i) {
+            legTransforms[i] = vsg::MatrixTransform::create();
+            robotTransform->addChild(legTransforms[i]);
+        }
+        
+        std::cout << "Created fallback empty robot" << std::endl;
+    }
+#endif
+}
+
+#ifndef USE_OPENGL_FALLBACK
+vsg::ref_ptr<vsg::MatrixTransform> Robot::getRobotNode() {
+    if (!robotTransform) {
+        createVisualModel();
+    }
+    return robotTransform;
+}
+
+void Robot::addToScene(vsg::ref_ptr<vsg::Group> scene) {
+    if (!robotTransform) {
+        createVisualModel();
+    }
+    scene->addChild(robotTransform);
+}
+#else
+ref_ptr<MatrixTransform> Robot::getRobotNode() {
+    // OpenGL fallback - return placeholder
+    return ref_ptr<MatrixTransform>(new MatrixTransform());
+}
+
+void Robot::addToScene(ref_ptr<Group> scene) {
+    // OpenGL fallback - robot handled differently
+}
+#endif
