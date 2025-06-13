@@ -36,6 +36,11 @@ public:
     }
 
     ~RobotSimulation() {
+        // Ensure all ODE-dependent objects are destroyed before closing ODE
+        terrain.reset();
+        controller.reset();
+        robot.reset();
+        physicsWorld.reset();
         dCloseODE();
     }
 
@@ -349,15 +354,9 @@ int main(int argc, char** argv) {
             simulation.run();
             
             std::cout << "\nSimulation completed successfully!" << std::endl;
-            
-            // Exit immediately to avoid destructor issues
-            _exit(0);
         } // simulation destructor called here in controlled manner
-        
+
         std::cout << "Cleanup complete." << std::endl;
-        
-        // Force immediate exit to avoid any ODE cleanup issues
-        _exit(0);
         
 #ifndef USE_OPENGL_FALLBACK
     } catch (const vsg::Exception& e) {

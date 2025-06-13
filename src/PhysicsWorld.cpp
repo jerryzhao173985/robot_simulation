@@ -136,6 +136,8 @@ void PhysicsWorld::handleCollision(dGeomID o1, dGeomID o2) {
             cp.normal = vsg::vec3(contact[i].geom.normal[0], contact[i].geom.normal[1], contact[i].geom.normal[2]);
             cp.depth = contact[i].geom.depth;
             cp.friction = contact[i].surface.mu;
+            cp.geom1 = o1;
+            cp.geom2 = o2;
             activeContacts.push_back(cp);
         }
     }
@@ -440,9 +442,10 @@ std::vector<PhysicsWorld::ContactPoint> PhysicsWorld::getContactPoints(dGeomID g
     std::vector<ContactPoint> contacts;
     
     for (const auto& contact : activeContacts) {
-        // This is a simplified check - in a real implementation,
-        // we'd need to check if the contact involves the specified geometry
-        contacts.push_back(contact);
+        // Only include contacts involving the specified geometry
+        if (contact.geom1 == geom || contact.geom2 == geom) {
+            contacts.push_back(contact);
+        }
     }
     
     return contacts;

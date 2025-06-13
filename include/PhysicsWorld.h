@@ -54,6 +54,8 @@ public:
         vsg_vec3 normal;
         float depth;
         float friction;
+        dGeomID geom1;
+        dGeomID geom2;
     };
 
     struct PhysicsObject {

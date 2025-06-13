@@ -287,14 +287,12 @@ void Terrain::generateNormals() {
             float hD = (z > 0) ? heightData[(z - 1) * size + x] : heightData[z * size + x];
             float hU = (z < size - 1) ? heightData[(z + 1) * size + x] : heightData[z * size + x];
             
-            // Calculate normal
-            vsg::vec3 normal;
-            // X-gradient (east-west), Y-gradient (north-south), Z is vertical (up)
-            normal.x = (hL - hR) / (2.0f * scale);
-            normal.y = (hD - hU) / (2.0f * scale);
-            normal.z = 2.0f;
-            
-            normals[z * size + x] = vsg::normalize(normal);
+            // Calculate normal using cross-product for accurate surface orientation
+            // Tangent vectors in x and y directions
+            vsg::vec3 dx(scale, 0.0f, hR - hL);
+            vsg::vec3 dy(0.0f, scale, hU - hD);
+            vsg::vec3 normal = vsg::normalize(vsg::cross(dx, dy));
+            normals[z * size + x] = normal;
         }
     }
 }
