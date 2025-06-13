@@ -134,12 +134,35 @@ void Robot::update(double deltaTime) {
 }
 
 void Robot::updateLegPositions() {
+    // Update leg sphere visuals under the robotTransform so they track ODE foot bodies
 #ifndef USE_OPENGL_FALLBACK
-    // Update visual transforms for each foot
+    // Get body world transform (for computing local positions)
+    const dReal* bodyPos = dBodyGetPosition(bodyId);
+    const dReal* bodyQ   = dBodyGetQuaternion(bodyId);
+    // Build inverse of body orientation
+    vsg_quat invBodyQ(
+        static_cast<float>(-bodyQ[1]),
+        static_cast<float>(-bodyQ[2]),
+        static_cast<float>(-bodyQ[3]),
+        static_cast<float>( bodyQ[0]));
     for (int i = 0; i < NUM_LEGS; ++i) {
-        if (i < (int)legTransforms.size() && !legs[i].segments.empty()) {
-            const dReal* pos = dBodyGetPosition(legs[i].segments.back().body);
-            legTransforms[i]->matrix = vsg::translate(pos[0], pos[1], pos[2]);
+        if (i < static_cast<int>(legTransforms.size()) && !legs[i].segments.empty()) {
+            dBodyID footBody = legs[i].segments.back().body;
+            const dReal* footPos = dBodyGetPosition(footBody);
+            const dReal* footQ   = dBodyGetQuaternion(footBody);
+            // Compute local foot position under body
+            float lx = static_cast<float>(footPos[0] - bodyPos[0]);
+            float ly = static_cast<float>(footPos[1] - bodyPos[1]);
+            float lz = static_cast<float>(footPos[2] - bodyPos[2]);
+            // Compute local foot orientation
+            vsg_quat fq(
+                static_cast<float>(footQ[1]),
+                static_cast<float>(footQ[2]),
+                static_cast<float>(footQ[3]),
+                static_cast<float>(footQ[0]));
+            vsg_quat localQ = invBodyQ * fq;
+            // Update the leg-sphere transform
+            legTransforms[i]->matrix = vsg::translate(lx, ly, lz) * vsg::rotate(localQ);
         }
     }
 #endif

@@ -227,6 +227,28 @@ for (auto footGeom : robot->getFootGeoms()) {
 }
 ```
 
+**Leg Visuals Sync**: In `Robot::updateLegPositions()` we now align each foot-sphere's VSG transform to the ODE body transform (position + rotation):
+(Note this section could be incorrect)
+
+```cpp
+// Use body inverse rotation and subtract the body position to compute local leg transforms
+const dReal* bodyPos = dBodyGetPosition(bodyId);
+const dReal* bodyQ   = dBodyGetQuaternion(bodyId);
+vsg_quat invBodyQ(-bodyQ[1], -bodyQ[2], -bodyQ[3], bodyQ[0]);
+for (int i = 0; i < NUM_LEGS; ++i) {
+    dBodyID footBody = legs[i].segments.back().body;
+    const dReal* footPos = dBodyGetPosition(footBody);
+    const dReal* footQ   = dBodyGetQuaternion(footBody);
+    // Compute local position & orientation under the robot root
+    float lx = static_cast<float>(footPos[0] - bodyPos[0]);
+    float ly = static_cast<float>(footPos[1] - bodyPos[1]);
+    float lz = static_cast<float>(footPos[2] - bodyPos[2]);
+    vsg_quat fq(footQ[1], footQ[2], footQ[3], footQ[0]);
+    vsg_quat localQ = invBodyQ * fq;
+    legTransforms[i]->matrix = vsg::translate(lx, ly, lz) * vsg::rotate(localQ);
+}
+```
+
 **Terrain Normals (Z-up)**: Normal generation revised in `generateNormals()`:
 ```cpp
 normal.x = (hL - hR)/(2*scale);
