@@ -170,12 +170,12 @@ private:
     
     // Robot configuration
     struct Config {
-        vsg_vec3 bodySize = vsg_vec3(0.6f, 0.2f, 0.4f);
+        vsg_vec3 bodySize = vsg_vec3(1.2f, 0.6f, 0.3f);     // Match Visualizer hexapod body
         float upperLegLength = 0.3f;
         float lowerLegLength = 0.25f;
         float legRadius = 0.02f;
         float footRadius = 0.03f;
-        float legAttachOffset = 0.25f;
+        float legAttachOffset = 0.3f;                        // Match leg spacing
     } config;
     
     static constexpr int NUM_LEGS = 6;

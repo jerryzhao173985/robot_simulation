@@ -139,6 +139,9 @@ public:
     void drawBox(const vsg_vec3& center, const vsg_vec3& size, const vsg_quat& rotation, const vsg_vec4& color);
     void clearDebugGeometry();
     
+    // Robot synchronization
+    void updateRobotTransform(const vsg_vec3& position, const vsg_quat& orientation);
+    
     // UI overlay
     void showStats(bool show) { showStatistics = show; }
     void showControls(bool show) { showControlsOverlay = show; }
@@ -185,6 +188,9 @@ private:
     vsg::ref_ptr<vsg::Group> axisIndicator;
     vsg::ref_ptr<vsg::CommandGraph> commandGraph;
     vsg::ref_ptr<vsg::RenderGraph> renderGraph;
+    
+    // Robot visual transform - synced with physics
+    vsg::ref_ptr<vsg::MatrixTransform> robotTransform;
     
     vsg::ref_ptr<vsg::Camera> vsgCamera;
     vsg::ref_ptr<vsg::LookAt> lookAt;

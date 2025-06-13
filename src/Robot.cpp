@@ -1,5 +1,6 @@
 #include "Robot.h"
 #include <iostream>
+#include <cmath>
 
 Robot::Robot(dWorldID world, dSpaceID space, 
 #ifdef USE_OPENGL_FALLBACK
@@ -13,6 +14,11 @@ Robot::Robot(dWorldID world, dSpaceID space,
     // Initialize physics
     bodyId = dBodyCreate(world);
     
+#ifndef USE_OPENGL_FALLBACK
+    // Ensure no visual components are created
+    robotTransform = nullptr;
+#endif
+    
     createBody();
     createLegs();
     
@@ -21,7 +27,8 @@ Robot::Robot(dWorldID world, dSpaceID space,
     dGeomSetBody(geom, bodyId);
     
     // Initialize visual representation
-    createVisualModel();
+    // Visual representation now handled by Visualizer class
+    // createVisualModel();
     
     std::cout << "Robot initialized with physics and visual components" << std::endl;
 }
@@ -47,8 +54,8 @@ void Robot::createBody() {
     dMassSetBoxTotal(&mass, 5.0f, config.bodySize.x, config.bodySize.y, config.bodySize.z);
     dBodySetMass(bodyId, &mass);
     
-    // Set initial position
-    dBodySetPosition(bodyId, 0.0f, 2.0f, 0.0f);
+    // Set initial position - Z-up coordinate system to match VSG visual model
+    dBodySetPosition(bodyId, 0.0f, 0.0f, 0.8f);  // Z-up: body at 0.8m height
     
     // Initialize leg containers
     legBodies.resize(6);
@@ -78,18 +85,8 @@ void Robot::update(double deltaTime) {
     
     // Update visual transform to match physics body
 #ifndef USE_OPENGL_FALLBACK
-    if (robotTransform && bodyId) {
-        const dReal* pos = dBodyGetPosition(bodyId);
-        const dReal* rot = dBodyGetRotation(bodyId);
-        
-        vsg::dmat4 matrix;
-        matrix[0][0] = rot[0]; matrix[0][1] = rot[1]; matrix[0][2] = rot[2]; matrix[0][3] = 0;
-        matrix[1][0] = rot[4]; matrix[1][1] = rot[5]; matrix[1][2] = rot[6]; matrix[1][3] = 0;
-        matrix[2][0] = rot[8]; matrix[2][1] = rot[9]; matrix[2][2] = rot[10]; matrix[2][3] = 0;
-        matrix[3][0] = pos[0]; matrix[3][1] = pos[1]; matrix[3][2] = pos[2]; matrix[3][3] = 1;
-        
-        robotTransform->matrix = matrix;
-    }
+    // Visual representation completely handled by Visualizer class
+    // No visual updates needed here - physics only
 #endif
 }
 
@@ -99,10 +96,24 @@ void Robot::updateLegPositions() {
 }
 
 vsg_vec3 Robot::getLegPosition(int legIndex) const {
-    // Position legs around the body perimeter
-    float angle = legIndex * 60.0f * M_PI / 180.0f;  // 60 degrees apart
-    float radius = config.legAttachOffset;
-    return vsg_vec3(cos(angle) * radius, 0.0f, sin(angle) * radius);
+    // Position legs in proper hexapod layout - 3 pairs along body sides
+    const double bodyLength = config.bodySize.x;
+    const double bodyWidth = config.bodySize.y;
+    
+    // X positions for front, middle, rear leg pairs
+    std::vector<double> legXPositions = { 
+        -bodyLength * 0.3,   // front legs
+         0.0,                // middle legs  
+         bodyLength * 0.3    // rear legs
+    };
+    
+    int pairIndex = legIndex / 2;  // 0, 1, 2 for front, middle, rear
+    int side = (legIndex % 2 == 0) ? -1 : 1;  // even = left, odd = right
+    
+    double x = legXPositions[pairIndex];
+    double y = side * (bodyWidth * 0.5);  // at body edge
+    
+    return vsg_vec3(x, y, 0.0f);  // Z offset handled by attachment point
 }
 
 void Robot::applyForces() {
@@ -138,7 +149,7 @@ void Robot::maintainBalance() {
 
 void Robot::reset() {
     // Reset position and orientation
-    dBodySetPosition(bodyId, 0, 2.0f, 0);
+    dBodySetPosition(bodyId, 0, 0, 0.8f);  // Z-up coordinate system
     dBodySetLinearVel(bodyId, 0, 0, 0);
     dBodySetAngularVel(bodyId, 0, 0, 0);
     
@@ -315,17 +326,15 @@ void Robot::createVisualModel() {
 
 #ifndef USE_OPENGL_FALLBACK
 vsg::ref_ptr<vsg::MatrixTransform> Robot::getRobotNode() {
-    if (!robotTransform) {
-        createVisualModel();
-    }
-    return robotTransform;
+    // Visual representation handled by Visualizer class
+    // Return null to prevent duplicate geometry
+    return nullptr;
 }
 
 void Robot::addToScene(vsg::ref_ptr<vsg::Group> scene) {
-    if (!robotTransform) {
-        createVisualModel();
-    }
-    scene->addChild(robotTransform);
+    // Visual representation completely handled by Visualizer class
+    // Do nothing to prevent duplicate geometry
+    // scene->addChild(robotTransform);
 }
 #else
 ref_ptr<MatrixTransform> Robot::getRobotNode() {

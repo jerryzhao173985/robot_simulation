@@ -59,7 +59,7 @@ public:
 
         // Create physics world
         physicsWorld = std::make_unique<PhysicsWorld>();
-        physicsWorld->setGravity(vsg_vec3(0.0f, -9.81f, 0.0f));
+        physicsWorld->setGravity(vsg_vec3(0.0f, 0.0f, -9.81f));
         physicsWorld->setGroundFriction(1.2f);
         physicsWorld->enableAdaptiveStepping(true);
 
@@ -78,9 +78,9 @@ public:
         robot->setMetallic(0.7f);
         robot->setRoughness(0.3f);
         
-        // Add robot to scene graph
-        robot->addToScene(sceneRoot);
-        std::cout << "Robot added to scene graph" << std::endl;
+        // Visual representation handled by Visualizer class
+        // robot->addToScene(sceneRoot);  // Disabled to prevent duplicate geometry
+        std::cout << "Robot physics initialized (visual handled by Visualizer)" << std::endl;
 
         // Create robot controller
         controller = std::make_unique<RobotController>(robot.get());
@@ -152,7 +152,11 @@ public:
             // Update camera to follow robot
             vsg_vec3 robotPos = robot->getPosition();
             visualizer->enableCameraFollow(true, robotPos);
-
+            
+            // Update robot visual model to match physics body
+            vsg_quat robotOrient = robot->getOrientation();
+            visualizer->updateRobotTransform(robotPos, robotOrient);
+            
             // Check if robot reached goal and set new one
             if (controller->hasReachedGoal()) {
                 setRandomNavigationGoal();

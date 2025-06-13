@@ -334,12 +334,14 @@ void RobotController::processSensorData(const std::vector<float>& sensorReadings
     if (sensorReadings.size() >= 6) {
         for (size_t i = 0; i < 6; ++i) {
             if (sensorReadings[i] < 2.0f) { // Obstacle detected within 2 units
-                float angle = (float)i * M_PI / 3.0f; // 60-degree intervals
-                obstacleDirection = vsg_vec3(cos(angle), 0, sin(angle));
-                obstacleDistance = sensorReadings[i];
-                
-                // Add to detected obstacles list
-                detectedObstacles.push_back(obstacleDirection * sensorReadings[i]);
+                if (sensorReadings[i] < 2.0f) {
+                    if (sensorReadings[i] < obstacleDistance) {
+                        float angle = i * M_PI / 3.0f;
+                        obstacleDirection = vsg_vec3(std::cos(angle), 0, std::sin(angle));
+                        obstacleDistance = sensorReadings[i];
+                    }
+                    detectedObstacles.push_back(obstacleDirection * sensorReadings[i]);
+                }
             }
         }
     }
