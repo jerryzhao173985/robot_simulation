@@ -179,6 +179,14 @@ private:
     void renderOpenGL();
     void drawCube(const vsg_vec3& position, const vsg_vec3& size, const vsg_vec4& color);
     void drawSphereOpenGL(const vsg_vec3& center, float radius, const vsg_vec4& color);
+
+    // free-camera spherical coords for interactive view (fallback)
+    float freeAzimuth = -3.14f/4.0f;
+    float freeElevation = 0.2f;
+    float freeDistance = 10.0f;
+    bool mouseDragging = false;
+    double dragLastX = 0.0;
+    double dragLastY = 0.0;
 #else
     // VSG backend
     vsg::ref_ptr<vsg::Window> window;
@@ -188,7 +196,7 @@ private:
     vsg::ref_ptr<vsg::Group> axisIndicator;
     vsg::ref_ptr<vsg::CommandGraph> commandGraph;
     vsg::ref_ptr<vsg::RenderGraph> renderGraph;
-    
+
     // Robot visual transform - synced with physics
     vsg::ref_ptr<vsg::MatrixTransform> robotTransform;
     

@@ -8,8 +8,8 @@ PhysicsWorld::PhysicsWorld() {
     space = dHashSpaceCreate(0);
     contactGroup = dJointGroupCreate(0);
     
-    // Set default parameters
-    dWorldSetGravity(world, 0, -9.81f, 0);
+    // Set default parameters (use Z-up in sync with VSG)
+    dWorldSetGravity(world, 0, 0, -9.81f);
     dWorldSetERP(world, 0.2f);
     dWorldSetCFM(world, 1e-5);
     dWorldSetContactMaxCorrectingVel(world, 0.9f);
@@ -17,8 +17,8 @@ PhysicsWorld::PhysicsWorld() {
     dWorldSetAutoDisableFlag(world, 1);
     dWorldSetQuickStepNumIterations(world, 20);
     
-    // Create ground plane
-    groundPlane = dCreatePlane(space, 0, 1, 0, 0);
+    // Create ground plane at Z=0 (Z-up coordinate system)
+    groundPlane = dCreatePlane(space, 0, 0, 1, 0);
     
     // Initialize debug group
     debugGroup = vsg::Group::create();

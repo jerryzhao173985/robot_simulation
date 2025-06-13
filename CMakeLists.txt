@@ -35,7 +35,7 @@ find_package(vsgXchange QUIET)
 # If VSG is not available, use OpenGL/GLFW fallback
 if(NOT vsg_FOUND OR NOT vsgXchange_FOUND)
     message(STATUS "VSG not found, using OpenGL/GLFW fallback")
-    set(USE_OPENGL_FALLBACK ON)
+    #set(USE_OPENGL_FALLBACK ON)  # always prefer VSG backend; fallback disabled by default
     
     # Find OpenGL and GLFW
     find_package(OpenGL REQUIRED)

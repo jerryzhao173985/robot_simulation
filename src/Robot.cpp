@@ -27,8 +27,8 @@ Robot::Robot(dWorldID world, dSpaceID space,
     dGeomSetBody(geom, bodyId);
     
     // Initialize visual representation
-    // Visual representation now handled by Visualizer class
-    // createVisualModel();
+    createVisualModel();
+    addToScene(sceneGraph);
     
     std::cout << "Robot initialized with physics and visual components" << std::endl;
 }
@@ -287,7 +287,7 @@ void Robot::createVisualModel() {
         for (int i = 0; i < 6; ++i) {
             auto legTransform = vsg::MatrixTransform::create();
             auto legPosition = getLegPosition(i);
-            legTransform->matrix = vsg::translate(legPosition.x, -config.bodySize.y/2 - config.footRadius, legPosition.z);
+            legTransform->matrix = vsg::translate(legPosition.x, legPosition.y, legPosition.z);
             
             vsg::GeometryInfo legGeomInfo;
             vsg::StateInfo legStateInfo;
@@ -326,15 +326,17 @@ void Robot::createVisualModel() {
 
 #ifndef USE_OPENGL_FALLBACK
 vsg::ref_ptr<vsg::MatrixTransform> Robot::getRobotNode() {
-    // Visual representation handled by Visualizer class
-    // Return null to prevent duplicate geometry
-    return nullptr;
+    if (!robotTransform) {
+        createVisualModel();
+    }
+    return robotTransform;
 }
 
 void Robot::addToScene(vsg::ref_ptr<vsg::Group> scene) {
-    // Visual representation completely handled by Visualizer class
-    // Do nothing to prevent duplicate geometry
-    // scene->addChild(robotTransform);
+    auto node = getRobotNode();
+    if (node) {
+        scene->addChild(node);
+    }
 }
 #else
 ref_ptr<MatrixTransform> Robot::getRobotNode() {

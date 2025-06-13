@@ -1,8 +1,10 @@
 #include "Visualizer.h"
 #include <iostream>
 
-#ifdef USE_OPENGL_FALLBACK
+
+ #ifdef USE_OPENGL_FALLBACK
     #include <cmath>
+    #include <algorithm>
     #include <cstring>
     
     // Simple OpenGL matrix operations
@@ -96,6 +98,17 @@ Visualizer::Visualizer(uint32_t width, uint32_t height)
     camera.followRobot = false;
     camera.followDistance = 10.0f;
     camera.followHeight = 5.0f;
+
+    // // Initialize camera: front-right 45° view, Z-up coordinate
+    // camera.position       = vsg_vec3(2.0f, -2.0f, 1.5f);
+    // camera.target         = vsg_vec3(0.0f,  0.0f,  0.3f);
+    // camera.up             = vsg_vec3(0.0f,  0.0f,  1.0f);
+    // camera.fov            = 45.0f;
+    // camera.nearPlane      = 0.1f;
+    // camera.farPlane       = 100.0f;
+    // camera.followRobot    = false;
+    // camera.followDistance = 5.0f;
+    // camera.followHeight   = 2.0f;
     
     lastTime = std::chrono::high_resolution_clock::now();
 }
@@ -132,23 +145,51 @@ bool Visualizer::initialize() {
         
         glfwMakeContextCurrent(window);
         glfwSwapInterval(vsyncEnabled ? 1 : 0);
-        
-        // Initialize OpenGL
+
+        // Initialize OpenGL settings
         glEnable(GL_DEPTH_TEST);
         glEnable(GL_LIGHTING);
         glEnable(GL_LIGHT0);
-        
-        float lightPos[] = {1.0f, 1.0f, 1.0f, 0.0f};
+        float lightPos[]   = {1.0f, 1.0f, 1.0f, 0.0f};
         float lightColor[] = {1.0f, 1.0f, 1.0f, 1.0f};
         glLightfv(GL_LIGHT0, GL_POSITION, lightPos);
-        glLightfv(GL_LIGHT0, GL_DIFFUSE, lightColor);
-        
+        glLightfv(GL_LIGHT0, GL_DIFFUSE,  lightColor);
         glClearColor(0.2f, 0.3f, 0.4f, 1.0f);
-        
+
+        // Setup simple mouse-driven arcball for free view
+        glfwSetWindowUserPointer(window, this);
+        glfwSetMouseButtonCallback(window,
+            [](GLFWwindow* w, int button, int action, int) {
+                auto viz = static_cast<Visualizer*>(glfwGetWindowUserPointer(w));
+                if (button == GLFW_MOUSE_BUTTON_LEFT) {
+                    if (action == GLFW_PRESS) {
+                        viz->mouseDragging = true;
+                        glfwGetCursorPos(w, &viz->dragLastX, &viz->dragLastY);
+                    } else {
+                        viz->mouseDragging = false;
+                    }
+                }
+            }
+        );
+        glfwSetCursorPosCallback(window,
+            [](GLFWwindow* w, double xpos, double ypos) {
+                auto viz = static_cast<Visualizer*>(glfwGetWindowUserPointer(w));
+                if (!viz->mouseDragging) return;
+                double dx = xpos - viz->dragLastX;
+                double dy = ypos - viz->dragLastY;
+                viz->dragLastX = xpos;
+                viz->dragLastY = ypos;
+                viz->freeAzimuth   += static_cast<float>(dx * 0.005);
+                viz->freeElevation += static_cast<float>(dy * 0.005);
+                viz->freeElevation = std::clamp(viz->freeElevation, -1.5f, 1.5f);
+            }
+        );
+
         // Create scene root
         sceneRoot = ref_ptr<Group>(new Group());
         
         return true;
+//  Modern VSG initialization using patterns from vsghelloworld example
 #else
         // Modern VSG initialization using patterns from examples
         
@@ -438,8 +479,33 @@ void Visualizer::enableCameraFollow(bool enable, const vsg_vec3& targetPos) {
 }
 
 void Visualizer::updateCamera() {
-    if (camera.followRobot && cameraMode == 1) {
-        // Calculate follow position
+    // Fallback free-camera controls (arrow keys + +/- zoom)
+#ifdef USE_OPENGL_FALLBACK
+    // Free-camera controls only in fallback mode
+    if (cameraMode == 0) {
+        const float azStep = 0.02f;
+        const float elStep = 0.02f;
+        const float zoomStep = 0.2f;
+        if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS)      freeAzimuth -= azStep;
+        if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS)     freeAzimuth += azStep;
+        freeElevation = std::clamp(
+            freeElevation + (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS ? elStep : 0.0f)
+            - (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS ? elStep : 0.0f),
+            -1.5f, 1.5f);
+        if (glfwGetKey(window, GLFW_KEY_EQUAL) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_KP_ADD) == GLFW_PRESS)
+            freeDistance = std::max(1.0f, freeDistance - zoomStep);
+        if (glfwGetKey(window, GLFW_KEY_MINUS) == GLFW_PRESS || glfwGetKey(window, GLFW_KEY_KP_SUBTRACT) == GLFW_PRESS)
+            freeDistance += zoomStep;
+        camera.position.x = freeDistance * cos(freeElevation) * sin(freeAzimuth);
+        camera.position.y = freeDistance * sin(freeElevation);
+        camera.position.z = freeDistance * cos(freeElevation) * cos(freeAzimuth);
+        camera.target      = vsg_vec3(0.0f, 0.0f, 0.0f);
+        return;
+    }
+#endif
+
+    // Follow mode
+    if (cameraMode == 1) {
         vsg_vec3 offset(
             -camera.followDistance * cos(frameTime * 0.1f),
             camera.followHeight,
@@ -831,8 +897,8 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
     vsg::StateInfo stateInfo;
     
     geomInfo.position.set(0.0f, 0.0f, 0.0f);      // centre at world origin
-    geomInfo.dx.set(50.0f, 0.0f, 0.0f);            // X extent
-    geomInfo.dy.set(0.0f, 50.0f, 0.0f);            // Y extent
+    geomInfo.dx.set(10.0f, 0.0f, 0.0f);            // X extent (smaller ground for clarity)
+    geomInfo.dy.set(0.0f, 10.0f, 0.0f);            // Y extent
     
     // Ground appearance - light grey
     stateInfo.lighting = true;
@@ -859,6 +925,8 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
     // Create body state for proper material
     vsg::StateInfo bodyStateInfo;
     bodyStateInfo.lighting = true;
+    // Explicitly set body material
+    bodyStateInfo.wireframe = false;
     
     auto bodyNode = builder->createBox(geomInfo, bodyStateInfo);
     robotTransform->addChild(bodyNode);
@@ -870,22 +938,19 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
     const double femurLength = 0.35;    // femur (thigh) segment  
     const double tibiaLength = 0.4;     // tibia (shin) segment
     const double segmentRadius = 0.04;  // consistent segment thickness
-    
-    // Create separate material states to avoid color bleeding
-    vsg::StateInfo legState;      // Dark grey for leg segments
-    legState.lighting = true;
-    // Explicitly set dark grey material for legs
+
+    // Define leg and joint colors
+    const auto legColor   = vsg::vec4(0.2f, 0.2f, 0.2f, 1.0f);
+    const auto jointColor = vsg::vec4(0.15f, 0.15f, 0.15f, 1.0f);
+
+    // Material states (lighting enabled, wireframe off)
+    vsg::StateInfo legState;
+    legState.lighting  = true;
     legState.wireframe = false;
-    
-    vsg::StateInfo jointState;    // Darker grey for joints
-    jointState.lighting = true;
-    // Explicitly set darker material for joints
+
+    vsg::StateInfo jointState;
+    jointState.lighting  = true;
     jointState.wireframe = false;
-    
-    vsg::StateInfo bodyState;     // Light grey for body
-    bodyState.lighting = true;
-    // Explicitly set body material
-    bodyState.wireframe = false;
     
     // Leg attachment points - 3 pairs along body sides
     std::vector<double> legXPositions = { 
@@ -906,7 +971,7 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
             auto legRoot = vsg::MatrixTransform::create();
             double rootX = legX;
             double rootY = sideSign * (bodyWidth * 0.5);  // exactly at body edge
-            double rootZ = -bodyHeight * 0.2;             // slightly below body center (local coords)
+            double rootZ = -bodyHeight * 0.5;             // attach legs at body bottom
             legRoot->matrix = vsg::translate(rootX, rootY, rootZ);
             
             // ======= COXA (hip segment) =======
@@ -919,7 +984,7 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
             geomInfo.dx.set(static_cast<float>(segmentRadius), 0.0f, 0.0f);
             geomInfo.dy.set(0.0f, static_cast<float>(segmentRadius), 0.0f);
             geomInfo.dz.set(0.0f, static_cast<float>(coxaLength), 0.0f); // extends in +Y direction
-            
+            geomInfo.color = legColor;
             auto coxaNode = builder->createCylinder(geomInfo, legState);
             coxaXform->addChild(coxaNode);
             legRoot->addChild(coxaXform);
@@ -935,7 +1000,7 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
             geomInfo.dx.set(static_cast<float>(segmentRadius), 0.0f, 0.0f);
             geomInfo.dy.set(0.0f, static_cast<float>(segmentRadius), 0.0f);
             geomInfo.dz.set(0.0f, static_cast<float>(femurLength), 0.0f);
-            
+            geomInfo.color = legColor;
             auto femurNode = builder->createCylinder(geomInfo, legState);
             femurXform->addChild(femurNode);
             coxaXform->addChild(femurXform);
@@ -951,7 +1016,7 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
             geomInfo.dx.set(static_cast<float>(segmentRadius), 0.0f, 0.0f);
             geomInfo.dy.set(0.0f, static_cast<float>(segmentRadius), 0.0f);
             geomInfo.dz.set(0.0f, static_cast<float>(tibiaLength), 0.0f);
-            
+            geomInfo.color = legColor;
             auto tibiaNode = builder->createCylinder(geomInfo, legState);
             tibiaXform->addChild(tibiaNode);
             femurXform->addChild(tibiaXform);
@@ -965,12 +1030,14 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
             geomInfo.dz.set(0.0f, 0.0f, jointRadius);
             
             // Hip joint
+            geomInfo.color = jointColor;
             auto hipJoint = builder->createSphere(geomInfo, jointState);
             legRoot->addChild(hipJoint);
             
             // Knee joint 
             auto kneeJointXform = vsg::MatrixTransform::create();
             kneeJointXform->matrix = vsg::translate(0.0, coxaLength, 0.0);
+            geomInfo.color = jointColor;
             auto kneeJoint = builder->createSphere(geomInfo, jointState);
             kneeJointXform->addChild(kneeJoint);
             coxaXform->addChild(kneeJointXform);
@@ -978,6 +1045,7 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
             // Ankle joint
             auto ankleJointXform = vsg::MatrixTransform::create();
             ankleJointXform->matrix = vsg::translate(0.0, femurLength, 0.0);
+            geomInfo.color = jointColor;
             auto ankleJoint = builder->createSphere(geomInfo, jointState);
             ankleJointXform->addChild(ankleJoint);
             femurXform->addChild(ankleJointXform);

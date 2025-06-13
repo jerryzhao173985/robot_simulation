@@ -78,9 +78,9 @@ public:
         robot->setMetallic(0.7f);
         robot->setRoughness(0.3f);
         
-        // Visual representation handled by Visualizer class
-        // robot->addToScene(sceneRoot);  // Disabled to prevent duplicate geometry
-        std::cout << "Robot physics initialized (visual handled by Visualizer)" << std::endl;
+        // Add robot visual model to scene root
+        robot->addToScene(sceneRoot);
+        std::cout << "Robot physics and visual model initialized" << std::endl;
 
         // Create robot controller
         controller = std::make_unique<RobotController>(robot.get());
