@@ -99,8 +99,6 @@ public:
         // Add some obstacles
         addObstacles();
         
-        // Add basic visual elements to ensure something renders
-        addBasicGeometry();
 
         // Setup camera
         visualizer->setCameraPosition(vsg_vec3(20.0f, 20.0f, 20.0f));
@@ -156,6 +154,8 @@ public:
 
                 accumulator -= fixedTimeStep;
             }
+
+            robot->updateLegPositions();
 
             // Update camera to follow robot
             vsg_vec3 robotPos = robot->getPosition();
@@ -239,19 +239,6 @@ private:
         );
     }
     
-    void addBasicGeometry() {
-#ifndef USE_OPENGL_FALLBACK
-        // Add a simple transform with basic content
-        auto transform = vsg::MatrixTransform::create();
-        transform->matrix = vsg::translate(0.0, 0.0, 1.0);
-        
-        // Add transform to scene to test basic VSG rendering pipeline
-        sceneRoot->addChild(transform);
-        
-        std::cout << "Added basic VSG transform to scene" << std::endl;
-        std::cout << "Scene graph has " << sceneRoot->children.size() << " children" << std::endl;
-#endif
-    }
 
     void setRandomNavigationGoal() {
         RobotController::NavigationGoal goal;

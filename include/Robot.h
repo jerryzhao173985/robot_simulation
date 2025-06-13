@@ -103,6 +103,7 @@ public:
     ~Robot();
 
     void update(double deltaTime);
+    void updateLegPositions();
     void applyControl(const std::vector<float>& motorCommands);
     void reset();
     
@@ -153,7 +154,6 @@ public:
 private:
     void createBody();
     void createLegs();
-    void updateLegPositions();
     vsg_vec3 getLegPosition(int legIndex) const;
     void applyForces();
     void maintainBalance();
