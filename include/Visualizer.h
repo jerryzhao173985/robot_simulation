@@ -141,6 +141,11 @@ public:
     
     // Robot synchronization
     void updateRobotTransform(const vsg_vec3& position, const vsg_quat& orientation);
+#ifndef USE_OPENGL_FALLBACK
+    void setRobotTransform(vsg::ref_ptr<vsg::MatrixTransform> transform) { robotTransform = transform; }
+#else
+    void setRobotTransform(ref_ptr<MatrixTransform> /*transform*/) {}
+#endif
     
     // UI overlay
     void showStats(bool show) { showStatistics = show; }

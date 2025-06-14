@@ -88,6 +88,8 @@ public:
         
         // Add robot visual model to scene root
         robot->addToScene(sceneRoot);
+        // Inform visualizer which transform to update
+        visualizer->setRobotTransform(robot->getRobotNode());
         std::cout << "Robot physics and visual model initialized" << std::endl;
 
         // Create robot controller
