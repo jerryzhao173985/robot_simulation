@@ -1,54 +1,10 @@
 #pragma once
 
 #ifdef USE_OPENGL_FALLBACK
-    #include <cmath>
-    #include <vector>
-    
-    // Simple vector classes for fallback mode
-    struct vec3 {
-        float x, y, z;
-        vec3(float x = 0, float y = 0, float z = 0) : x(x), y(y), z(z) {}
-        vec3 operator+(const vec3& other) const { return vec3(x + other.x, y + other.y, z + other.z); }
-        vec3 operator-(const vec3& other) const { return vec3(x - other.x, y - other.y, z - other.z); }
-        vec3 operator*(float s) const { return vec3(x * s, y * s, z * s); }
-        float length() const { return std::sqrt(x*x + y*y + z*z); }
-        vec3 normalize() const { float l = length(); return l > 0 ? *this * (1.0f/l) : vec3(); }
-    };
-    
-    struct vec4 {
-        float x, y, z, w;
-        vec4(float x = 0, float y = 0, float z = 0, float w = 1) : x(x), y(y), z(z), w(w) {}
-    };
-    
-    struct quat {
-        float x, y, z, w;
-        quat(float x = 0, float y = 0, float z = 0, float w = 1) : x(x), y(y), z(z), w(w) {}
-    };
-    
-    using vsg_vec3 = vec3;
-    using vsg_vec4 = vec4;
-    using vsg_quat = quat;
-    
-    template<typename T>
-    struct ref_ptr {
-        T* ptr = nullptr;
-        ref_ptr() = default;
-        ref_ptr(T* p) : ptr(p) {}
-        T* operator->() { return ptr; }
-        const T* operator->() const { return ptr; }
-        T& operator*() { return *ptr; }
-        const T& operator*() const { return *ptr; }
-        operator bool() const { return ptr != nullptr; }
-    };
-    
-    class Group {
-    public:
-        std::vector<void*> children;
-        void addChild(void* child) { children.push_back(child); }
-    };
-    
-    class MatrixTransform {};
-    class PhongMaterialValue {};
+    #include "FallbackTypes.h"
+    using vsg_vec3 = vsg::vec3;
+    using vsg_vec4 = vsg::vec4;
+    using vsg_quat = vsg::quat;
     
 #else
 #include <vsg/all.h>

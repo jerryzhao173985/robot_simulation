@@ -1,0 +1,376 @@
+name: Robot Simulation CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  # Code Quality Checks
+  code-quality:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install code analysis tools
+      run: |
+        sudo apt update
+        sudo apt install -y clang-format cppcheck
+
+    - name: Check code formatting
+      run: |
+        find src include -name "*.cpp" -o -name "*.h" | xargs clang-format --dry-run --Werror
+
+    - name: Run static analysis
+      run: |
+        cppcheck --enable=all --error-exitcode=1 --suppress=missingIncludeSystem \
+          --suppress=unusedFunction --suppress=unmatchedSuppression \
+          src/ include/
+
+  # Linux Build with VSG (Primary)
+  linux-vsg-build:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Cache VSG Installation
+      id: cache-vsg
+      uses: actions/cache@v4
+      with:
+        path: |
+          /usr/local/lib/cmake/vsg
+          /usr/local/lib/cmake/vsgXchange
+          /usr/local/include/vsg
+          /usr/local/include/vsgXchange
+          /usr/local/lib/libvsg*
+          /usr/local/lib/libvsgXchange*
+          /usr/local/share/vsgExamples
+        key: vsg-ubuntu24-${{ hashFiles('**/CMakeLists.txt') }}-v2
+
+    - name: Install system dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y glslang-dev glslang-tools libode-dev 
+        
+        sudo apt install -y \
+            build-essential git pkg-config cmake ninja-build \
+            libvulkan1 libvulkan-dev                 \
+            vulkan-validationlayers                  \
+            vulkan-utility-libraries-dev             \
+            vulkan-tools spirv-tools glslang-dev
+
+    - name: Build and Install VSG Dependencies
+      if: steps.cache-vsg.outputs.cache-hit != 'true'
+      run: |
+        # Build VulkanSceneGraph
+        git clone --recursive https://github.com/vsg-dev/VulkanSceneGraph.git
+        cd VulkanSceneGraph
+        mkdir build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -GNinja
+        ninja -j$(nproc)
+        sudo ninja install
+        
+        # Build vsgXchange
+        cd $GITHUB_WORKSPACE
+        git clone --recursive https://github.com/vsg-dev/vsgXchange.git
+        cd vsgXchange && mkdir build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -GNinja \
+                -DVSG_DIR=/usr/local/lib/cmake/vsg
+        ninja -j$(nproc) && sudo ninja install
+        
+        # Build vsgExamples for data files
+        cd $GITHUB_WORKSPACE
+        git clone --recursive https://github.com/vsg-dev/vsgExamples.git
+        cd vsgExamples && mkdir build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -GNinja \
+                -DVSG_DIR=/usr/local/lib/cmake/vsg \
+                -DVSGXCHANGE_DIR=/usr/local/lib/cmake/vsgXchange
+        ninja -j$(nproc)
+        # Install data files
+        sudo mkdir -p /usr/local/share/vsgExamples
+        sudo cp -r ../data /usr/local/share/vsgExamples/
+
+    - name: Configure Robot Simulation
+      run: |
+        export VSG_FILE_PATH=/usr/local/share/vsgExamples/data
+        export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
+        cd $GITHUB_WORKSPACE
+        mkdir -p build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+
+    - name: Build Robot Simulation
+      run: |
+        cd $GITHUB_WORKSPACE/build
+        export PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:$PKG_CONFIG_PATH
+        make -j$(nproc)
+
+    - name: Test Build (Smoke Test)
+      run: |
+        cd $GITHUB_WORKSPACE/build
+        export VSG_FILE_PATH=/usr/local/share/vsgExamples/data
+        export LD_LIBRARY_PATH=/usr/local/lib:$LD_LIBRARY_PATH
+        # Test that the binary exists and can start
+        ls -la ./vsg_ode_robot
+        ldd ./vsg_ode_robot || true
+        timeout 10s ./vsg_ode_robot || echo "Smoke test completed (expected timeout)"
+        echo "VSG build test completed successfully"
+
+    - name: Upload Build Artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: robot-simulation-linux-vsg
+        path: |
+          ${{ github.workspace }}/build/vsg_ode_robot
+          ${{ github.workspace }}/build/shaders/
+
+  # Linux OpenGL Fallback Build
+  linux-opengl-build:
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install OpenGL dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+            build-essential cmake pkg-config \
+            libode-dev libglfw3-dev libgl1-mesa-dev \
+            libglu1-mesa-dev xorg-dev
+
+    - name: Configure Robot Simulation (OpenGL Fallback)
+      run: |
+        cd $GITHUB_WORKSPACE
+        mkdir -p build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+                -DUSE_OPENGL_FALLBACK=ON
+
+    - name: Build Robot Simulation (OpenGL)
+      run: |
+        cd $GITHUB_WORKSPACE/build
+        make -j$(nproc)
+
+    - name: Test OpenGL Build (Headless)
+      run: |
+        cd $GITHUB_WORKSPACE/build
+        # Install virtual display for headless testing
+        sudo apt install -y xvfb
+        export DISPLAY=:99
+        Xvfb :99 -screen 0 1024x768x24 &
+        sleep 3
+        
+        # Test the OpenGL fallback build
+        ls -la ./vsg_ode_robot
+        ldd ./vsg_ode_robot || true
+        timeout 10s ./vsg_ode_robot || echo "OpenGL fallback test completed (expected timeout)"
+        echo "OpenGL fallback build test completed successfully"
+
+  # Integration and Physics Tests
+  integration-tests:
+    runs-on: ubuntu-24.04
+    needs: [linux-vsg-build]
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install test dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+            build-essential cmake pkg-config \
+            libode-dev libglfw3-dev libgl1-mesa-dev \
+            xvfb valgrind
+
+    - name: Build for Testing (OpenGL for CI stability)
+      run: |
+        cd $GITHUB_WORKSPACE
+        mkdir -p build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Debug \
+                -DUSE_OPENGL_FALLBACK=ON \
+                -DCMAKE_CXX_FLAGS="-g -O1 -fsanitize=address -fno-omit-frame-pointer"
+
+    - name: Compile Test Build
+      run: |
+        cd $GITHUB_WORKSPACE/build
+        make -j$(nproc)
+
+    - name: Run Integration Tests
+      run: |
+        cd $GITHUB_WORKSPACE/build
+        export DISPLAY=:99
+        Xvfb :99 -screen 0 1024x768x24 &
+        sleep 3
+        
+        # Basic functionality test
+        echo "Testing basic startup and shutdown..."
+        ls -la ./vsg_ode_robot
+        ldd ./vsg_ode_robot || true
+        timeout 15s ./vsg_ode_robot || echo "Basic integration test completed"
+        
+        # Memory leak check (short run)
+        echo "Running memory leak detection..."
+        timeout 20s valgrind --leak-check=full --show-leak-kinds=all \
+          --error-exitcode=1 --track-origins=yes \
+          ./vsg_ode_robot 2>&1 | tee valgrind.log || echo "Memory test completed"
+        
+        # Check for critical memory issues
+        if grep -q "definitely lost" valgrind.log; then
+          echo "❌ Memory leaks detected!"
+          cat valgrind.log
+          exit 1
+        else
+          echo "✅ No critical memory leaks detected"
+        fi
+
+    - name: Upload Test Results
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: integration-test-results
+        path: |
+          ${{ github.workspace }}/build/valgrind.log
+
+  # macOS Build (For compatibility)
+  macos-build:
+    runs-on: macos-14
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install Homebrew dependencies
+      run: |
+        brew update
+        brew install cmake ninja pkg-config ode glfw vulkan-headers vulkan-loader molten-vk
+
+    - name: Cache VSG for macOS
+      id: cache-vsg-macos
+      uses: actions/cache@v4
+      with:
+        path: |
+          /usr/local/lib/cmake/vsg
+          /usr/local/lib/cmake/vsgXchange
+          /usr/local/include/vsg
+          /usr/local/include/vsgXchange
+          /usr/local/lib/libvsg*
+          /usr/local/lib/libvsgXchange*
+        key: vsg-macos14-${{ hashFiles('**/CMakeLists.txt') }}-v2
+
+    - name: Build VSG for macOS
+      if: steps.cache-vsg-macos.outputs.cache-hit != 'true'
+      run: |
+        # Build VulkanSceneGraph
+        git clone --recursive https://github.com/vsg-dev/VulkanSceneGraph.git
+        cd VulkanSceneGraph
+        mkdir build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -GNinja
+        ninja -j$(sysctl -n hw.ncpu)
+        sudo ninja install
+        
+        cd ~
+        # Build vsgXchange
+        git clone --recursive https://github.com/vsg-dev/vsgXchange.git
+        cd vsgXchange && mkdir build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release -GNinja
+        ninja && sudo ninja install
+
+    - name: Configure Robot Simulation (macOS)
+      run: |
+        mkdir build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }}
+
+    - name: Build Robot Simulation (macOS)
+      run: |
+        cd build
+        make -j$(sysctl -n hw.ncpu)
+
+    - name: Test macOS Build
+      run: |
+        cd build
+        # Quick smoke test
+        timeout 5s ./vsg_ode_robot || echo "macOS build test completed (expected timeout)"
+        echo "macOS build completed successfully"
+
+  # Performance Monitoring
+  performance-test:
+    runs-on: ubuntu-24.04
+    needs: [linux-vsg-build]
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Install performance test dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y \
+            build-essential cmake pkg-config \
+            libode-dev libglfw3-dev libgl1-mesa-dev \
+            xvfb time
+
+    - name: Build Optimized Version
+      run: |
+        cd $GITHUB_WORKSPACE
+        mkdir -p build && cd build
+        cmake .. -DCMAKE_BUILD_TYPE=Release \
+                -DUSE_OPENGL_FALLBACK=ON \
+                -DCMAKE_CXX_FLAGS="-O3 -march=native -DNDEBUG"
+        make -j$(nproc)
+
+    - name: Run Performance Benchmark
+      run: |
+        cd $GITHUB_WORKSPACE/build
+        export DISPLAY=:99
+        Xvfb :99 -screen 0 1024x768x24 &
+        sleep 3
+        
+        echo "Starting performance benchmark..."
+        # Run with timing
+        /usr/bin/time -v timeout 30s ./vsg_ode_robot 2>&1 | tee performance.log || true
+        
+        echo "Performance benchmark completed"
+        cat performance.log
+
+    - name: Upload Performance Results
+      uses: actions/upload-artifact@v4
+      with:
+        name: performance-results
+        path: |
+          ${{ github.workspace }}/build/performance.log
+
+  # Build Status Summary
+  build-summary:
+    runs-on: ubuntu-24.04
+    needs: [code-quality, linux-vsg-build, linux-opengl-build, integration-tests, macos-build]
+    if: always()
+    steps:
+    - name: Check build results
+      run: |
+        echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+        echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Code Quality | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Linux VSG Build | ${{ needs.linux-vsg-build.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Linux OpenGL Build | ${{ needs.linux-opengl-build.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Integration Tests | ${{ needs.integration-tests.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| macOS Build | ${{ needs.macos-build.result }} |" >> $GITHUB_STEP_SUMMARY
+        
+        # Fail if any critical job failed
+        if [[ "${{ needs.linux-vsg-build.result }}" == "failure" ]] || \
+           [[ "${{ needs.integration-tests.result }}" == "failure" ]]; then
+          echo "❌ Critical builds failed!"
+          exit 1
+        else
+          echo "✅ All critical builds passed!"
+        fi

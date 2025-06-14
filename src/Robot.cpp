@@ -83,40 +83,76 @@ void Robot::createLegs() {
     legBodies.resize(NUM_LEGS);
     legJoints.resize(NUM_LEGS);
     for (int i = 0; i < NUM_LEGS; ++i) {
-        // compute attachment point relative to body center
+        legs[i].segments.clear();
+
         vsg_vec3 attach = getLegPosition(i);
-        // create foot body
-        dBodyID footBody = dBodyCreate(world);
-        dMass m;
-        dMassSetSphereTotal(&m, 0.1f, config.footRadius);
-        dBodySetMass(footBody, &m);
-        // position foot relative to body
         const dReal* bodyPos = dBodyGetPosition(bodyId);
-        dBodySetPosition(footBody,
+
+        // ----- Upper leg (coxa) -----
+        dBodyID upperBody = dBodyCreate(world);
+        dMass m;
+        dMassSetCapsuleTotal(&m, 0.2f, 3, config.legRadius, config.upperLegLength);
+        dBodySetMass(upperBody, &m);
+        dBodySetPosition(upperBody,
             bodyPos[0] + attach.x,
             bodyPos[1] + attach.y,
-            bodyPos[2] + attach.z - config.footRadius);
-        // create foot geometry
-        dGeomID footGeom = dCreateSphere(space, config.footRadius);
-        dGeomSetBody(footGeom, footBody);
-        // attach foot to body via ball joint
-        dJointID joint = dJointCreateBall(world, 0);
-        dJointAttach(joint, bodyId, footBody);
-        dJointSetBallAnchor(joint,
+            bodyPos[2] + attach.z - config.upperLegLength * 0.5f);
+        dGeomID upperGeom = dCreateCapsule(space, config.legRadius, config.upperLegLength);
+        dGeomSetBody(upperGeom, upperBody);
+        dJointID hip = dJointCreateBall(world, 0);
+        dJointAttach(hip, bodyId, upperBody);
+        dJointSetBallAnchor(hip,
             bodyPos[0] + attach.x,
             bodyPos[1] + attach.y,
             bodyPos[2] + attach.z);
-        // store segment
-        legs[i].segments.clear();
-        LegSegment seg;
-        seg.body = footBody;
-        seg.geom = footGeom;
-        seg.joint = joint;
-        seg.length = config.footRadius;
-        seg.radius = config.footRadius;
-        legs[i].segments.push_back(seg);
+
+        LegSegment segUpper{upperBody, upperGeom, hip, config.upperLegLength, config.legRadius};
+        legs[i].segments.push_back(segUpper);
+
+        // ----- Lower leg (femur) -----
+        dBodyID lowerBody = dBodyCreate(world);
+        dMassSetCapsuleTotal(&m, 0.15f, 3, config.legRadius, config.lowerLegLength);
+        dBodySetMass(lowerBody, &m);
+        dBodySetPosition(lowerBody,
+            bodyPos[0] + attach.x,
+            bodyPos[1] + attach.y,
+            bodyPos[2] + attach.z - config.upperLegLength - config.lowerLegLength * 0.5f);
+        dGeomID lowerGeom = dCreateCapsule(space, config.legRadius, config.lowerLegLength);
+        dGeomSetBody(lowerGeom, lowerBody);
+        dJointID knee = dJointCreateHinge(world, 0);
+        dJointAttach(knee, upperBody, lowerBody);
+        dJointSetHingeAnchor(knee,
+            bodyPos[0] + attach.x,
+            bodyPos[1] + attach.y,
+            bodyPos[2] + attach.z - config.upperLegLength);
+        dJointSetHingeAxis(knee, 1, 0, 0);
+
+        LegSegment segLower{lowerBody, lowerGeom, knee, config.lowerLegLength, config.legRadius};
+        legs[i].segments.push_back(segLower);
+
+        // ----- Foot (tibia/foot sphere) -----
+        dBodyID footBody = dBodyCreate(world);
+        dMassSetSphereTotal(&m, 0.05f, config.footRadius);
+        dBodySetMass(footBody, &m);
+        dBodySetPosition(footBody,
+            bodyPos[0] + attach.x,
+            bodyPos[1] + attach.y,
+            bodyPos[2] + attach.z - config.upperLegLength - config.lowerLegLength - config.footRadius);
+        dGeomID footGeom = dCreateSphere(space, config.footRadius);
+        dGeomSetBody(footGeom, footBody);
+        dJointID ankle = dJointCreateHinge(world, 0);
+        dJointAttach(ankle, lowerBody, footBody);
+        dJointSetHingeAnchor(ankle,
+            bodyPos[0] + attach.x,
+            bodyPos[1] + attach.y,
+            bodyPos[2] + attach.z - config.upperLegLength - config.lowerLegLength);
+        dJointSetHingeAxis(ankle, 1, 0, 0);
+
+        LegSegment segFoot{footBody, footGeom, ankle, config.footRadius, config.footRadius};
+        legs[i].segments.push_back(segFoot);
+
         legBodies[i] = footBody;
-        legJoints[i] = joint;
+        legJoints[i] = hip; // store hip joint for reference
     }
 }
 
