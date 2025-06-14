@@ -158,18 +158,27 @@ void Robot::updateLegPositions() {
 }
 
 vsg_vec3 Robot::getLegPosition(int legIndex) const {
-    double halfWidth = config.bodySize.x * 0.5;
+    // Align coordinate conventions with Visualizer
+    // bodySize.x = length (forward/back)
+    // bodySize.y = width  (left/right)
+    double halfLength = config.bodySize.x * 0.5;
+    double halfWidth  = config.bodySize.y * 0.5;
     double halfHeight = config.bodySize.z * 0.5;
-    std::array<double, 3> legY = {
-        -config.bodySize.y * 0.3,
-         0.0,
-         config.bodySize.y * 0.3
+
+    // Three leg pairs along the body length
+    std::array<double, 3> legX = {
+        -halfLength * 0.6,
+        0.0,
+        halfLength * 0.6
     };
+
     int pairIndex = legIndex / 2;
-    int sideSign = (legIndex % 2 == 0) ? -1 : 1;
-    double x = sideSign * halfWidth;
-    double y = legY[pairIndex];
+    int sideSign  = (legIndex % 2 == 0) ? -1 : 1; // left (-1) right (+1)
+
+    double x = legX[pairIndex];
+    double y = sideSign * halfWidth;
     double z = -halfHeight;
+
     return vsg_vec3(x, y, z);
 }
 
