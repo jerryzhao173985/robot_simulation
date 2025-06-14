@@ -1,27 +1,9 @@
 #pragma once
 
 #ifdef USE_OPENGL_FALLBACK
-    #include <cmath>
-    #include <vector>
-    
-    // Simple vector classes for fallback mode
-    struct vec3 {
-        float x, y, z;
-        vec3(float x = 0, float y = 0, float z = 0) : x(x), y(y), z(z) {}
-        vec3 operator+(const vec3& other) const { return vec3(x + other.x, y + other.y, z + other.z); }
-        vec3 operator-(const vec3& other) const { return vec3(x - other.x, y - other.y, z - other.z); }
-        vec3 operator*(float s) const { return vec3(x * s, y * s, z * s); }
-        float length() const { return std::sqrt(x*x + y*y + z*z); }
-        vec3 normalize() const { float l = length(); return l > 0 ? *this * (1.0f/l) : vec3(); }
-    };
-    
-    struct quat {
-        float x, y, z, w;
-        quat(float x = 0, float y = 0, float z = 0, float w = 1) : x(x), y(y), z(z), w(w) {}
-    };
-    
-    using vsg_vec3 = vec3;
-    using vsg_quat = quat;
+    #include "FallbackTypes.h"
+    using vsg_vec3 = vsg::vec3;
+    using vsg_quat = vsg::quat;
     
 #else
 #include <vsg/all.h>
