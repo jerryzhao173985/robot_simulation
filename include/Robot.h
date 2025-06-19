@@ -1,54 +1,10 @@
 #pragma once
 
 #ifdef USE_OPENGL_FALLBACK
-    #include <cmath>
-    #include <vector>
-    
-    // Simple vector classes for fallback mode
-    struct vec3 {
-        float x, y, z;
-        vec3(float x = 0, float y = 0, float z = 0) : x(x), y(y), z(z) {}
-        vec3 operator+(const vec3& other) const { return vec3(x + other.x, y + other.y, z + other.z); }
-        vec3 operator-(const vec3& other) const { return vec3(x - other.x, y - other.y, z - other.z); }
-        vec3 operator*(float s) const { return vec3(x * s, y * s, z * s); }
-        float length() const { return std::sqrt(x*x + y*y + z*z); }
-        vec3 normalize() const { float l = length(); return l > 0 ? *this * (1.0f/l) : vec3(); }
-    };
-    
-    struct vec4 {
-        float x, y, z, w;
-        vec4(float x = 0, float y = 0, float z = 0, float w = 1) : x(x), y(y), z(z), w(w) {}
-    };
-    
-    struct quat {
-        float x, y, z, w;
-        quat(float x = 0, float y = 0, float z = 0, float w = 1) : x(x), y(y), z(z), w(w) {}
-    };
-    
-    using vsg_vec3 = vec3;
-    using vsg_vec4 = vec4;
-    using vsg_quat = quat;
-    
-    template<typename T>
-    struct ref_ptr {
-        T* ptr = nullptr;
-        ref_ptr() = default;
-        ref_ptr(T* p) : ptr(p) {}
-        T* operator->() { return ptr; }
-        const T* operator->() const { return ptr; }
-        T& operator*() { return *ptr; }
-        const T& operator*() const { return *ptr; }
-        operator bool() const { return ptr != nullptr; }
-    };
-    
-    class Group {
-    public:
-        std::vector<void*> children;
-        void addChild(void* child) { children.push_back(child); }
-    };
-    
-    class MatrixTransform {};
-    class PhongMaterialValue {};
+    #include "FallbackTypes.h"
+    using vsg_vec3 = vsg::vec3;
+    using vsg_vec4 = vsg::vec4;
+    using vsg_quat = vsg::quat;
     
 #else
 #include <vsg/all.h>
@@ -65,6 +21,13 @@
 
 class Robot {
 public:
+    // Leg segment indices for clear identification and reduced indexing errors
+    enum class LegSegmentIndex : int {
+        COXA = 0,   // Hip segment - connects to body via ball joint
+        FEMUR = 1,  // Thigh segment - connects to coxa via hinge joint
+        TIBIA = 2   // Shin/foot segment - connects to femur via hinge joint, used for ground contact
+    };
+    
     struct LegSegment {
         dBodyID body;
         dGeomID geom;
@@ -79,7 +42,7 @@ public:
     };
 
     struct Leg {
-        std::vector<LegSegment> segments;
+        std::vector<LegSegment> segments;  // [COXA=0, FEMUR=1, TIBIA=2] - anatomical order from body to foot
         vsg_vec3 attachmentPoint;
         float targetAngle;
         float currentAngle;
@@ -119,10 +82,12 @@ public:
     std::vector<float> getSensorReadings() const;
     float getEnergyConsumption() const { return energyConsumption; }
     bool isStable() const;
+    
     // ODE body & geometry handles (for contact-based control)
     dBodyID getBody() const;
     dGeomID getBodyGeom() const;
-    // Get all foot geometry IDs (one per leg) for contact sensing
+    // Get all foot geometry IDs - specifically tibia segments used for ground contact sensing
+    // Note: Only tibia segments (index 2) are returned as they represent the feet in hexapod anatomy
     std::vector<dGeomID> getFootGeoms() const;
     
     // Visual customization
@@ -167,8 +132,6 @@ private:
     // Physics bodies
     dBodyID bodyId;
     dGeomID bodyGeom;    // box geometry for main body (used for contact queries)
-    std::vector<dBodyID> legBodies;
-    std::vector<dJointID> legJoints;
     
     // Visual representation
 #ifdef USE_OPENGL_FALLBACK
@@ -179,18 +142,25 @@ private:
     vsg::ref_ptr<vsg::Group> sceneGraph;
 #endif
     
-    // Robot configuration
+    // Robot configuration - ANATOMICALLY CORRECT HEXAPOD DIMENSIONS
+    // These values are carefully chosen to match real hexapod proportions and ensure stable locomotion
     struct Config {
-        vsg_vec3 bodySize = vsg_vec3(1.2f, 0.6f, 0.3f);     // Match Visualizer hexapod body
-        float upperLegLength = 0.3f;
-        float lowerLegLength = 0.25f;
-        float legRadius = 0.02f;
-        float footRadius = 0.03f;
-        float legAttachOffset = 0.3f;                        // Match leg spacing (unused)
+        // Main body dimensions (matching Visualizer for perfect sync)
+        vsg_vec3 bodySize = vsg_vec3(1.2f, 0.6f, 0.3f);     // Length x Width x Height
+        
+        // Leg segment dimensions (realistic hexapod anatomy with proper proportions)
+        // Based on typical arthropod leg ratios: coxa < femur ≈ tibia for optimal reach and stability
+        float coxaLength = 0.25f;    // Hip segment - shortest, provides body attachment and outward extension
+        float femurLength = 0.35f;   // Thigh segment - primary support, angled downward for height
+        float tibiaLength = 0.4f;    // Shin/foot segment - longest for ground reach and contact surface
+        float legRadius = 0.04f;     // Consistent segment thickness for uniform appearance
+        
+        // Contact properties (tibia end serves as the foot contact point)
+        float footRadius = 0.05f;    // Foot contact radius for ground interaction
     } config;
     
     static constexpr int NUM_LEGS = 6;
-    static constexpr int SEGMENTS_PER_LEG = 3;
+    static constexpr int SEGMENTS_PER_LEG = 3;  // coxa, femur, tibia (anatomical order)
     std::array<Leg, NUM_LEGS> legs;
     std::vector<Sensor> sensors;
     
