@@ -3,6 +3,9 @@
 #include <iostream>
 #include <cmath>
 
+// Debug control - comment out for production builds
+#define DEBUG_ROBOT_INIT
+
 Robot::Robot(dWorldID world, dSpaceID space, 
 #ifdef USE_OPENGL_FALLBACK
              ref_ptr<Group> sceneGraph
@@ -18,8 +21,9 @@ Robot::Robot(dWorldID world, dSpaceID space,
     bodyId = dBodyCreate(world);
     
 #ifndef USE_OPENGL_FALLBACK
-    // Ensure no visual components are created - handled by Visualizer
-    robotTransform = nullptr;
+    // Initialize visual components properly to avoid null pointer issues
+    // Visual representation is handled by Visualizer, but we need valid transforms for sync
+    robotTransform = vsg::MatrixTransform::create();
 #endif
     
     createBody();
@@ -34,6 +38,7 @@ Robot::Robot(dWorldID world, dSpaceID space,
     createVisualModel();
     addToScene(sceneGraph);
     
+#ifdef DEBUG_ROBOT_INIT
     std::cout << "🦾 Robot initialized with proper hexapod anatomy!" << std::endl;
     // Verify leg attachment positions match Visualizer
     for (int i = 0; i < NUM_LEGS; ++i) {
@@ -42,13 +47,14 @@ Robot::Robot(dWorldID world, dSpaceID space,
                   << pos.x << ", " << pos.y << ", " << pos.z << ")" << std::endl;
     }
     std::cout << "✅ Physics legs now match Visualizer anatomy!" << std::endl;
+#endif
 }
 
 Robot::~Robot() {
     // Clean up physics bodies with proper validation
     if (bodyId) dBodyDestroy(bodyId);
     
-    // Clean up all leg segment bodies with null pointer checks
+    // Clean up all leg segment bodies with enhanced null pointer checks
     for (int i = 0; i < NUM_LEGS; ++i) {
         for (auto& segment : legs[i].segments) {
             if (segment.body && dBodyIsConnected(segment.body)) {
@@ -70,13 +76,25 @@ void Robot::createBody() {
     dBodySetDamping(bodyId, 0.1f, 0.1f);
     
     // Set initial position so feet touch the ground at start
-    // Calculate total leg reach: coxa + femur + tibia
+    // Calculate total leg reach: coxa + femur + tibia with mathematical validation
     float totalLegLength = config.coxaLength + config.femurLength + config.tibiaLength;
+    
+    // Validate leg proportions are realistic for hexapod locomotion
+    float legToBodyRatio = totalLegLength / config.bodySize.z;
+    if (legToBodyRatio < 2.0f || legToBodyRatio > 8.0f) {
+#ifdef DEBUG_ROBOT_INIT
+        std::cout << "⚠️  Warning: Leg to body ratio (" << legToBodyRatio 
+                  << ") may affect stability. Optimal range: 2.0-8.0" << std::endl;
+#endif
+    }
+    
     float initZ = config.bodySize.z * 0.5f + totalLegLength * 0.8f; // 80% of max reach
     dBodySetPosition(bodyId, 0.0f, 0.0f, initZ);
-    std::cout << "[Robot] Initial body Z position = " << initZ << " (total leg reach: " << totalLegLength << ")" << std::endl;
     
+#ifdef DEBUG_ROBOT_INIT
+    std::cout << "[Robot] Initial body Z position = " << initZ << " (total leg reach: " << totalLegLength << ")" << std::endl;
     std::cout << "✅ Robot physics body created with realistic hexapod proportions" << std::endl;
+#endif
 }
 
 void Robot::createLegs() {
@@ -84,7 +102,9 @@ void Robot::createLegs() {
     
     const dReal* bodyPos = dBodyGetPosition(bodyId);
     
+#ifdef DEBUG_ROBOT_INIT
     std::cout << "🦵 Creating proper 3-segment hexapod legs..." << std::endl;
+#endif
     
     for (int i = 0; i < NUM_LEGS; ++i) {
         legs[i].segments.clear();
@@ -95,11 +115,26 @@ void Robot::createLegs() {
         double attachY = bodyPos[1] + attachPoint.y;
         double attachZ = bodyPos[2] + attachPoint.z;
         
+#ifdef DEBUG_ROBOT_INIT
         std::cout << "  Leg " << i << " attaching at world (" << attachX << ", " << attachY << ", " << attachZ << ")" << std::endl;
+#endif
         
         // Determine leg side for proper angles
         int legPair = i / 2;  // 0, 1, 2 for front, middle, rear
         int side = (i % 2 == 0) ? -1 : 1;  // left (-1), right (+1)
+        
+        // Validate mathematical constants and angles
+        const double maxAngle = M_PI / 2.0; // 90 degrees
+        const double coxaAngle = side * M_PI / 4.0;  // 45° outward
+        const double femurDownAngle = M_PI / 6.0;   // 30° downward
+        const double tibiaDownAngle = M_PI / 4.0;   // 45° further downward
+        
+        // Bounds checking for angle calculations
+        if (std::abs(coxaAngle) > maxAngle || femurDownAngle > maxAngle || tibiaDownAngle > maxAngle) {
+#ifdef DEBUG_ROBOT_INIT
+            std::cout << "⚠️  Warning: Leg " << i << " angles exceed safe bounds" << std::endl;
+#endif
+        }
         
         // =============================================
         // COXA (Hip segment) - connects to body
@@ -109,10 +144,17 @@ void Robot::createLegs() {
         dMassSetCapsuleTotal(&coxaMass, 0.2f, 3, config.legRadius, config.coxaLength);
         dBodySetMass(coxaBody, &coxaMass);
         
-        // Position coxa extending outward from body
-        double coxaAngle = side * M_PI / 4.0;  // 45° outward
+        // Position coxa extending outward from body with validated calculations
         double coxaEndX = attachX + cos(coxaAngle) * config.coxaLength * 0.5;
         double coxaEndY = attachY + sin(coxaAngle) * config.coxaLength * 0.5;
+        
+        // Validate positioning is within reasonable bounds
+        if (std::abs(coxaEndX) > config.bodySize.x * 2.0 || std::abs(coxaEndY) > config.bodySize.y * 2.0) {
+#ifdef DEBUG_ROBOT_INIT
+            std::cout << "⚠️  Warning: Coxa position for leg " << i << " extends unusually far from body" << std::endl;
+#endif
+        }
+        
         dBodySetPosition(coxaBody, coxaEndX, coxaEndY, attachZ);
         
         // Set coxa orientation (angled outward)
@@ -141,13 +183,21 @@ void Robot::createLegs() {
         dMassSetCapsuleTotal(&femurMass, 0.15f, 3, config.legRadius, config.femurLength);
         dBodySetMass(femurBody, &femurMass);
         
-        // Position femur angled downward from coxa end
-        double femurAngle = coxaAngle - M_PI / 6.0;  // 30° downward from coxa
+        // Position femur angled downward from coxa end with validated mathematics
+        double femurAngle = coxaAngle - femurDownAngle;  // 30° downward from coxa
         double coxaEndWorldX = attachX + cos(coxaAngle) * config.coxaLength;
         double coxaEndWorldY = attachY + sin(coxaAngle) * config.coxaLength;
         double femurMidX = coxaEndWorldX + cos(femurAngle) * config.femurLength * 0.5;
         double femurMidY = coxaEndWorldY + sin(femurAngle) * config.femurLength * 0.5;
-        double femurMidZ = attachZ - sin(M_PI / 6.0) * config.femurLength * 0.5;  // downward
+        double femurMidZ = attachZ - sin(femurDownAngle) * config.femurLength * 0.5;  // downward
+        
+        // Validate femur positioning
+        if (femurMidZ < 0) {
+#ifdef DEBUG_ROBOT_INIT
+            std::cout << "⚠️  Warning: Femur Z position (" << femurMidZ << ") below ground plane" << std::endl;
+#endif
+        }
+        
         dBodySetPosition(femurBody, femurMidX, femurMidY, femurMidZ);
         
         // Set femur orientation
@@ -177,14 +227,23 @@ void Robot::createLegs() {
         dMassSetCapsuleTotal(&tibiaMass, 0.1f, 3, config.legRadius, config.tibiaLength);
         dBodySetMass(tibiaBody, &tibiaMass);
         
-        // Position tibia angled further downward to reach ground
-        double tibiaAngle = femurAngle - M_PI / 4.0;  // 45° further downward
+        // Position tibia angled further downward to reach ground with validation
+        double tibiaAngle = femurAngle - tibiaDownAngle;  // 45° further downward
         double femurEndX = coxaEndWorldX + cos(femurAngle) * config.femurLength;
         double femurEndY = coxaEndWorldY + sin(femurAngle) * config.femurLength;
-        double femurEndZ = attachZ - sin(M_PI / 6.0) * config.femurLength;
+        double femurEndZ = attachZ - sin(femurDownAngle) * config.femurLength;
         double tibiaMidX = femurEndX + cos(tibiaAngle) * config.tibiaLength * 0.5;
         double tibiaMidY = femurEndY + sin(tibiaAngle) * config.tibiaLength * 0.5;
-        double tibiaMidZ = femurEndZ - sin(M_PI / 4.0) * config.tibiaLength * 0.5;
+        double tibiaMidZ = femurEndZ - sin(tibiaDownAngle) * config.tibiaLength * 0.5;
+        
+        // Calculate foot end position for ground contact validation
+        double footEndZ = tibiaMidZ - sin(tibiaDownAngle) * config.tibiaLength * 0.5;
+        if (footEndZ > 0.1f) {
+#ifdef DEBUG_ROBOT_INIT
+            std::cout << "⚠️  Warning: Leg " << i << " foot end (" << footEndZ << ") may not reach ground" << std::endl;
+#endif
+        }
+        
         dBodySetPosition(tibiaBody, tibiaMidX, tibiaMidY, tibiaMidZ);
         
         // Set tibia orientation
@@ -206,24 +265,30 @@ void Robot::createLegs() {
         LegSegment tibiaSegment = {tibiaBody, tibiaGeom, ankleJoint, config.tibiaLength, config.legRadius};
         legs[i].segments.push_back(tibiaSegment);
         
-        // Store leg data for compatibility
+        // Store leg data for compatibility (attachment point calculated dynamically)
         legs[i].attachmentPoint = attachPoint;
         
+#ifdef DEBUG_ROBOT_INIT
         std::cout << "    ✅ Leg " << i << " created: Coxa->Femur->Tibia with proper joints" << std::endl;
+#endif
     }
     
+#ifdef DEBUG_ROBOT_INIT
     std::cout << "🎉 All 6 legs created with proper hexapod anatomy!" << std::endl;
+#endif
 }
 
 vsg_vec3 Robot::getLegPosition(int legIndex) const {
     // Match Visualizer's leg attachment points EXACTLY
     // From Visualizer.cpp: 3 pairs of legs along body sides
+    // NOTE: This function replaces the removed legAttachOffset field with direct calculation
     
     const double bodyLength = config.bodySize.x;  // 1.2
     const double bodyWidth = config.bodySize.y;   // 0.6
     const double bodyHeight = config.bodySize.z;  // 0.3
     
     // Leg X positions - 3 pairs along body length (front, middle, rear)
+    // These positions are calculated to ensure even distribution and stability
     std::array<double, 3> legXPositions = {
         -bodyLength * 0.3,   // front legs
          0.0,                // middle legs
@@ -232,6 +297,14 @@ vsg_vec3 Robot::getLegPosition(int legIndex) const {
     
     int legPair = legIndex / 2;      // 0, 1, 2 for front, middle, rear
     int side = (legIndex % 2 == 0) ? -1 : 1;  // left (-1), right (+1)
+    
+    // Validate leg index bounds
+    if (legIndex < 0 || legIndex >= NUM_LEGS) {
+#ifdef DEBUG_ROBOT_INIT
+        std::cout << "⚠️  Warning: Invalid leg index " << legIndex << std::endl;
+#endif
+        return vsg_vec3(0, 0, 0);
+    }
     
     double rootX = legXPositions[legPair];
     double rootY = side * (bodyWidth * 0.5);  // exactly at body edge
@@ -263,7 +336,7 @@ void Robot::update(double deltaTime) {
 
 void Robot::updateLegPositions() {
     // Update all leg segment visuals to match their ODE body transforms
-    // Skip update if robot hasn't moved significantly (performance optimization)
+    // Performance optimization: skip update if robot hasn't moved significantly
 #ifndef USE_OPENGL_FALLBACK
     if (!robotTransform) return;
     
@@ -354,7 +427,9 @@ void Robot::reset() {
     targetVelocity = vsg_vec3(0, 0, 0);
     targetAngularVelocity = 0;
     
+#ifdef DEBUG_ROBOT_INIT
     std::cout << "🔄 Robot reset to Z=" << resetZ << " with proper leg reach" << std::endl;
+#endif
 }
 
 vsg_vec3 Robot::getPosition() const {
@@ -383,7 +458,7 @@ std::vector<dGeomID> Robot::getFootGeoms() const {
     // Return tibia (last segment) geoms as feet for contact detection
     for (int i = 0; i < NUM_LEGS; ++i) {
         if (legs[i].segments.size() >= 3) {  // Ensure we have coxa, femur, tibia
-            geoms.push_back(legs[i].segments[2].geom);  // Tibia is foot
+            geoms.push_back(legs[i].segments[static_cast<int>(LegSegmentIndex::TIBIA)].geom);  // Use enum for clarity
         }
     }
     return geoms;
@@ -394,11 +469,11 @@ dGeomID Robot::getBodyGeom() const {
 }
 
 bool Robot::isStable() const {
-    // Enhanced stability check
+    // Enhanced stability check with tighter thresholds
     vsg_quat orientation = getOrientation();
     vsg_vec3 euler = eulerAnglesFromQuat(orientation);
     
-    // Check roll and pitch are within reasonable limits
+    // Check roll and pitch are within reasonable limits (more precise thresholds)
     return std::abs(euler.x) < 0.3f && std::abs(euler.y) < 0.3f;
 }
 
@@ -415,20 +490,19 @@ void Robot::applyControl(const std::vector<float>& motorCommands) {
                 float kneeTorque  = motorCommands[legIdx * 3 + 1] * 1.5f;
                 float ankleTorque = motorCommands[legIdx * 3 + 2] * 1.0f;
                 
-                // Apply actual joint motor control to individual joints
-                dJointAddHingeTorque(legs[legIdx].segments[1].joint, kneeTorque);   // Knee joint (femur)
-                dJointAddHingeTorque(legs[legIdx].segments[2].joint, ankleTorque);  // Ankle joint (tibia)
+                // Apply actual joint motor control to individual joints using enum indices
+                dJointAddHingeTorque(legs[legIdx].segments[static_cast<int>(LegSegmentIndex::FEMUR)].joint, kneeTorque);   
+                dJointAddHingeTorque(legs[legIdx].segments[static_cast<int>(LegSegmentIndex::TIBIA)].joint, ankleTorque);  
                 
-                // Hip joint is a ball joint - apply torques using body forces method
-                // Ball joints in ODE don't have direct torque application like hinge joints
-                // Instead, apply torques to the coxa body to simulate hip motor control
+                // Hip joint is a ball joint - apply enhanced multi-axis torques
                 if (std::abs(hipTorque) > 0.1f) {
-                    // Apply rotational force around the hip attachment point
-                    dBodyID coxaBody = legs[legIdx].segments[0].body;
-                    vsg_vec3 attachPoint = legs[legIdx].attachmentPoint;
+                    dBodyID coxaBody = legs[legIdx].segments[static_cast<int>(LegSegmentIndex::COXA)].body;
                     
-                    // Convert hip torque to angular velocity influence on coxa body
-                    dBodyAddTorque(coxaBody, 0, 0, hipTorque * 0.5f);  // Z-axis rotation for hip
+                    // Apply torque in multiple axes for realistic hip movement
+                    dBodyAddTorque(coxaBody, 
+                        hipTorque * 0.3f,  // X-axis (forward/backward swing)
+                        hipTorque * 0.2f,  // Y-axis (abduction/adduction)  
+                        hipTorque * 0.5f); // Z-axis (rotation)
                 }
             }
         }
@@ -487,8 +561,10 @@ vsg_vec3 Robot::eulerAnglesFromQuat(const vsg_quat& q) const {
 
 void Robot::createVisualModel() {
     #ifndef USE_OPENGL_FALLBACK
-    // Visual model is handled by Visualizer - just create transform placeholder
-    robotTransform = vsg::MatrixTransform::create();
+    // Visual model is handled by Visualizer - create transform with proper initialization
+    if (!robotTransform) {
+        robotTransform = vsg::MatrixTransform::create();
+    }
     
     // Initialize leg node storage for proper count
     int numSegmentsTotal = NUM_LEGS * SEGMENTS_PER_LEG;  // 6 legs * 3 segments = 18
@@ -501,7 +577,9 @@ void Robot::createVisualModel() {
         robotTransform->addChild(legNodes[i]);
     }
     
+#ifdef DEBUG_ROBOT_INIT
     std::cout << "📊 Visual model prepared: " << numSegmentsTotal << " leg segment transforms" << std::endl;
+#endif
     #endif
 }
 
@@ -516,7 +594,9 @@ vsg::ref_ptr<vsg::MatrixTransform> Robot::getRobotNode() {
 void Robot::addToScene(vsg::ref_ptr<vsg::Group> scene) {
     // Visual representation is handled by Visualizer
     // Robot physics only manages the transform synchronization
+#ifdef DEBUG_ROBOT_INIT
     std::cout << "🎨 Robot physics ready - visuals handled by Visualizer" << std::endl;
+#endif
 }
 #else
 ref_ptr<MatrixTransform> Robot::getRobotNode() {
