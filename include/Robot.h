@@ -1,54 +1,10 @@
 #pragma once
 
 #ifdef USE_OPENGL_FALLBACK
-    #include <cmath>
-    #include <vector>
-    
-    // Simple vector classes for fallback mode
-    struct vec3 {
-        float x, y, z;
-        vec3(float x = 0, float y = 0, float z = 0) : x(x), y(y), z(z) {}
-        vec3 operator+(const vec3& other) const { return vec3(x + other.x, y + other.y, z + other.z); }
-        vec3 operator-(const vec3& other) const { return vec3(x - other.x, y - other.y, z - other.z); }
-        vec3 operator*(float s) const { return vec3(x * s, y * s, z * s); }
-        float length() const { return std::sqrt(x*x + y*y + z*z); }
-        vec3 normalize() const { float l = length(); return l > 0 ? *this * (1.0f/l) : vec3(); }
-    };
-    
-    struct vec4 {
-        float x, y, z, w;
-        vec4(float x = 0, float y = 0, float z = 0, float w = 1) : x(x), y(y), z(z), w(w) {}
-    };
-    
-    struct quat {
-        float x, y, z, w;
-        quat(float x = 0, float y = 0, float z = 0, float w = 1) : x(x), y(y), z(z), w(w) {}
-    };
-    
-    using vsg_vec3 = vec3;
-    using vsg_vec4 = vec4;
-    using vsg_quat = quat;
-    
-    template<typename T>
-    struct ref_ptr {
-        T* ptr = nullptr;
-        ref_ptr() = default;
-        ref_ptr(T* p) : ptr(p) {}
-        T* operator->() { return ptr; }
-        const T* operator->() const { return ptr; }
-        T& operator*() { return *ptr; }
-        const T& operator*() const { return *ptr; }
-        operator bool() const { return ptr != nullptr; }
-    };
-    
-    class Group {
-    public:
-        std::vector<void*> children;
-        void addChild(void* child) { children.push_back(child); }
-    };
-    
-    class MatrixTransform {};
-    class PhongMaterialValue {};
+    #include "FallbackTypes.h"
+    using vsg_vec3 = vsg::vec3;
+    using vsg_vec4 = vsg::vec4;
+    using vsg_quat = vsg::quat;
     
 #else
 #include <vsg/all.h>
@@ -79,7 +35,7 @@ public:
     };
 
     struct Leg {
-        std::vector<LegSegment> segments;
+        std::vector<LegSegment> segments;  // [0]=coxa, [1]=femur, [2]=tibia
         vsg_vec3 attachmentPoint;
         float targetAngle;
         float currentAngle;
@@ -119,10 +75,11 @@ public:
     std::vector<float> getSensorReadings() const;
     float getEnergyConsumption() const { return energyConsumption; }
     bool isStable() const;
+    
     // ODE body & geometry handles (for contact-based control)
     dBodyID getBody() const;
     dGeomID getBodyGeom() const;
-    // Get all foot geometry IDs (one per leg) for contact sensing
+    // Get all foot geometry IDs (tibia segments) for contact sensing
     std::vector<dGeomID> getFootGeoms() const;
     
     // Visual customization
@@ -167,8 +124,6 @@ private:
     // Physics bodies
     dBodyID bodyId;
     dGeomID bodyGeom;    // box geometry for main body (used for contact queries)
-    std::vector<dBodyID> legBodies;
-    std::vector<dJointID> legJoints;
     
     // Visual representation
 #ifdef USE_OPENGL_FALLBACK
@@ -179,18 +134,23 @@ private:
     vsg::ref_ptr<vsg::Group> sceneGraph;
 #endif
     
-    // Robot configuration
+    // Robot configuration - UPDATED FOR PROPER HEXAPOD ANATOMY
     struct Config {
-        vsg_vec3 bodySize = vsg_vec3(1.2f, 0.6f, 0.3f);     // Match Visualizer hexapod body
-        float upperLegLength = 0.3f;
-        float lowerLegLength = 0.25f;
-        float legRadius = 0.02f;
-        float footRadius = 0.03f;
-        float legAttachOffset = 0.3f;                        // Match leg spacing (unused)
+        // Body dimensions (matching Visualizer exactly)
+        vsg_vec3 bodySize = vsg_vec3(1.2f, 0.6f, 0.3f);     // Length x Width x Height
+        
+        // Leg segment dimensions (realistic hexapod proportions)
+        float coxaLength = 0.25f;    // Hip segment
+        float femurLength = 0.35f;   // Thigh segment  
+        float tibiaLength = 0.4f;    // Shin segment (includes foot)
+        float legRadius = 0.04f;     // Consistent segment thickness
+        
+        // Foot properties (tibia end is the foot)
+        float footRadius = 0.05f;    // Foot contact radius
     } config;
     
     static constexpr int NUM_LEGS = 6;
-    static constexpr int SEGMENTS_PER_LEG = 3;
+    static constexpr int SEGMENTS_PER_LEG = 3;  // coxa, femur, tibia
     std::array<Leg, NUM_LEGS> legs;
     std::vector<Sensor> sensors;
     
