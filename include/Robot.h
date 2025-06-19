@@ -21,6 +21,13 @@
 
 class Robot {
 public:
+    // Leg segment indices for clear identification and reduced indexing errors
+    enum class LegSegmentIndex : int {
+        COXA = 0,   // Hip segment - connects to body via ball joint
+        FEMUR = 1,  // Thigh segment - connects to coxa via hinge joint
+        TIBIA = 2   // Shin/foot segment - connects to femur via hinge joint, used for ground contact
+    };
+    
     struct LegSegment {
         dBodyID body;
         dGeomID geom;
@@ -35,7 +42,7 @@ public:
     };
 
     struct Leg {
-        std::vector<LegSegment> segments;  // [0]=coxa, [1]=femur, [2]=tibia
+        std::vector<LegSegment> segments;  // [COXA=0, FEMUR=1, TIBIA=2] - anatomical order from body to foot
         vsg_vec3 attachmentPoint;
         float targetAngle;
         float currentAngle;
@@ -79,7 +86,8 @@ public:
     // ODE body & geometry handles (for contact-based control)
     dBodyID getBody() const;
     dGeomID getBodyGeom() const;
-    // Get all foot geometry IDs (tibia segments) for contact sensing
+    // Get all foot geometry IDs - specifically tibia segments used for ground contact sensing
+    // Note: Only tibia segments (index 2) are returned as they represent the feet in hexapod anatomy
     std::vector<dGeomID> getFootGeoms() const;
     
     // Visual customization
@@ -134,23 +142,25 @@ private:
     vsg::ref_ptr<vsg::Group> sceneGraph;
 #endif
     
-    // Robot configuration - UPDATED FOR PROPER HEXAPOD ANATOMY
+    // Robot configuration - ANATOMICALLY CORRECT HEXAPOD DIMENSIONS
+    // These values are carefully chosen to match real hexapod proportions and ensure stable locomotion
     struct Config {
-        // Body dimensions (matching Visualizer exactly)
+        // Main body dimensions (matching Visualizer for perfect sync)
         vsg_vec3 bodySize = vsg_vec3(1.2f, 0.6f, 0.3f);     // Length x Width x Height
         
-        // Leg segment dimensions (realistic hexapod proportions)
-        float coxaLength = 0.25f;    // Hip segment
-        float femurLength = 0.35f;   // Thigh segment  
-        float tibiaLength = 0.4f;    // Shin segment (includes foot)
-        float legRadius = 0.04f;     // Consistent segment thickness
+        // Leg segment dimensions (realistic hexapod anatomy with proper proportions)
+        // Based on typical arthropod leg ratios: coxa < femur ≈ tibia for optimal reach and stability
+        float coxaLength = 0.25f;    // Hip segment - shortest, provides body attachment and outward extension
+        float femurLength = 0.35f;   // Thigh segment - primary support, angled downward for height
+        float tibiaLength = 0.4f;    // Shin/foot segment - longest for ground reach and contact surface
+        float legRadius = 0.04f;     // Consistent segment thickness for uniform appearance
         
-        // Foot properties (tibia end is the foot)
-        float footRadius = 0.05f;    // Foot contact radius
+        // Contact properties (tibia end serves as the foot contact point)
+        float footRadius = 0.05f;    // Foot contact radius for ground interaction
     } config;
     
     static constexpr int NUM_LEGS = 6;
-    static constexpr int SEGMENTS_PER_LEG = 3;  // coxa, femur, tibia
+    static constexpr int SEGMENTS_PER_LEG = 3;  // coxa, femur, tibia (anatomical order)
     std::array<Leg, NUM_LEGS> legs;
     std::vector<Sensor> sensors;
     
