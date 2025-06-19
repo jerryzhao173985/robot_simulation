@@ -45,14 +45,18 @@ Robot::Robot(dWorldID world, dSpaceID space,
 }
 
 Robot::~Robot() {
-    // Clean up physics bodies
+    // Clean up physics bodies with proper validation
     if (bodyId) dBodyDestroy(bodyId);
     
-    // Clean up all leg segment bodies
+    // Clean up all leg segment bodies with null pointer checks
     for (int i = 0; i < NUM_LEGS; ++i) {
         for (auto& segment : legs[i].segments) {
-            if (segment.body) dBodyDestroy(segment.body);
-            if (segment.joint) dJointDestroy(segment.joint);
+            if (segment.body && dBodyIsConnected(segment.body)) {
+                dBodyDestroy(segment.body);
+            }
+            if (segment.joint) {
+                dJointDestroy(segment.joint);
+            }
         }
     }
 }
@@ -259,11 +263,17 @@ void Robot::update(double deltaTime) {
 
 void Robot::updateLegPositions() {
     // Update all leg segment visuals to match their ODE body transforms
+    // Skip update if robot hasn't moved significantly (performance optimization)
 #ifndef USE_OPENGL_FALLBACK
     if (!robotTransform) return;
     
-    // Get body transform for relative positioning
+    static vsg::dvec3 lastBodyPos;
     const dReal* bodyPos = dBodyGetPosition(bodyId);
+    vsg::dvec3 currentPos(bodyPos[0], bodyPos[1], bodyPos[2]);
+    if (vsg::length(currentPos - lastBodyPos) < 0.001) return;
+    lastBodyPos = currentPos;
+    
+    // Get body transform for relative positioning
     const dReal* bodyQ = dBodyGetQuaternion(bodyId);
     
     vsg::dquat invBodyQ(-bodyQ[1], -bodyQ[2], -bodyQ[3], bodyQ[0]); // Inverse body rotation
@@ -370,7 +380,7 @@ std::vector<dGeomID> Robot::getFootGeoms() const {
     std::vector<dGeomID> geoms;
     geoms.reserve(NUM_LEGS);
     
-    // Return tibia (last segment) geoms as feet
+    // Return tibia (last segment) geoms as feet for contact detection
     for (int i = 0; i < NUM_LEGS; ++i) {
         if (legs[i].segments.size() >= 3) {  // Ensure we have coxa, femur, tibia
             geoms.push_back(legs[i].segments[2].geom);  // Tibia is foot
@@ -397,22 +407,28 @@ void Robot::setBodyColor(const vsg_vec4& color) {
 }
 
 void Robot::applyControl(const std::vector<float>& motorCommands) {
-    // Enhanced control for 3-segment legs
+    // Enhanced control for 3-segment legs with proper joint motor control
     if (motorCommands.size() >= NUM_LEGS * 3) {  // 3 joints per leg
-        // Apply torques to individual joints
         for (int legIdx = 0; legIdx < NUM_LEGS && legIdx * 3 + 2 < motorCommands.size(); ++legIdx) {
             if (legs[legIdx].segments.size() >= 3) {
-                float hipTorque = motorCommands[legIdx * 3 + 0] * 2.0f;
-                float kneeTorque = motorCommands[legIdx * 3 + 1] * 1.5f;
+                float hipTorque   = motorCommands[legIdx * 3 + 0] * 2.0f;
+                float kneeTorque  = motorCommands[legIdx * 3 + 1] * 1.5f;
                 float ankleTorque = motorCommands[legIdx * 3 + 2] * 1.0f;
                 
-                // Apply torques to joints (simplified - would need proper joint motor setup)
-                // For now, influence overall movement
+                // Apply actual joint motor control to individual joints
+                dJointAddHingeTorque(legs[legIdx].segments[1].joint, kneeTorque);   // Knee joint (femur)
+                dJointAddHingeTorque(legs[legIdx].segments[2].joint, ankleTorque);  // Ankle joint (tibia)
+                
+                // Hip joint is a ball joint - apply torques using body forces method
+                // Ball joints in ODE don't have direct torque application like hinge joints
+                // Instead, apply torques to the coxa body to simulate hip motor control
                 if (std::abs(hipTorque) > 0.1f) {
-                    targetVelocity.x += hipTorque * 0.1f;
-                }
-                if (std::abs(kneeTorque) > 0.1f) {
-                    targetVelocity.y += kneeTorque * 0.1f;
+                    // Apply rotational force around the hip attachment point
+                    dBodyID coxaBody = legs[legIdx].segments[0].body;
+                    vsg_vec3 attachPoint = legs[legIdx].attachmentPoint;
+                    
+                    // Convert hip torque to angular velocity influence on coxa body
+                    dBodyAddTorque(coxaBody, 0, 0, hipTorque * 0.5f);  // Z-axis rotation for hip
                 }
             }
         }
@@ -435,7 +451,7 @@ std::vector<float> Robot::getSensorReadings() const {
     vsg_quat orient = getOrientation();
     readings.insert(readings.end(), {orient.x, orient.y, orient.z, orient.w});
     
-    // Add leg ground contact status (simplified)
+    // Add leg ground contact status (based on tibia position and ground contact)
     for (int i = 0; i < NUM_LEGS; ++i) {
         readings.push_back(legs[i].isGrounded ? 1.0f : 0.0f);
     }
