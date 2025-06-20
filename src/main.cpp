@@ -15,6 +15,7 @@
 #include "Visualizer.h"
 #include "InputHandler.h"
 #include "DebugOutput.h"
+#include "NoiseManager.h"
 #include "TestEventHandler.h"
 #include "ComprehensiveEventDebugger.h"
 
@@ -51,8 +52,8 @@ public:
     }
 
     bool initialize() {
-        // Create visualizer
-        visualizer = std::make_unique<Visualizer>(1920, 1080);
+        // Create visualizer with smaller window size
+        visualizer = std::make_unique<Visualizer>(800, 600);
         if (!visualizer->initialize()) {
             std::cerr << "Failed to initialize visualizer" << std::endl;
             return false;
@@ -93,6 +94,15 @@ public:
         robot->setMetallic(0.7f);
         robot->setRoughness(0.3f);
         
+        // Set physics world for contact sensors
+        robot->setPhysicsWorld(physicsWorld.get());
+        
+        // Initialize NoiseManager with number of sensors and actuators
+        NoiseManager::getInstance().init(
+            robot->getSensorNames().size(),  // Number of sensors
+            robot->getActuatorNames().size() // Number of actuators
+        );
+        
         // Add robot visual model to scene root
         robot->addToScene(sceneRoot);
         std::cout << "Robot physics and visual model initialized" << std::endl;
@@ -103,17 +113,22 @@ public:
         controller->enableObstacleAvoidance(true);
         controller->enableDynamicStability(true);
         
+        std::cout << "RobotController created and configured:" << std::endl;
+        std::cout << "  - Control Mode: AUTONOMOUS" << std::endl;
+        std::cout << "  - Obstacle Avoidance: ENABLED" << std::endl;
+        std::cout << "  - Dynamic Stability: ENABLED" << std::endl;
+        
         // Create input handler
 #ifndef USE_OPENGL_FALLBACK
-        // Add comprehensive event debugger
-        auto eventDebugger = ComprehensiveEventDebugger::create();
-        visualizer->addEventHandler(eventDebugger);
-        std::cout << "Added ComprehensiveEventDebugger to visualizer" << std::endl;
+        // Add comprehensive event debugger (disabled for performance)
+        // auto eventDebugger = ComprehensiveEventDebugger::create();
+        // visualizer->addEventHandler(eventDebugger);
+        // std::cout << "Added ComprehensiveEventDebugger to visualizer" << std::endl;
         
-        // Add test handler to verify events
-        auto testHandler = TestEventHandler::create();
-        visualizer->addEventHandler(testHandler);
-        std::cout << "Added TestEventHandler to visualizer" << std::endl;
+        // Add test handler to verify events (disabled for performance)
+        // auto testHandler = TestEventHandler::create();
+        // visualizer->addEventHandler(testHandler);
+        // std::cout << "Added TestEventHandler to visualizer" << std::endl;
         
         auto vsgInputHandler = InputHandler::create(controller.get(), visualizer.get());
         visualizer->addEventHandler(vsgInputHandler);
@@ -123,7 +138,8 @@ public:
         inputHandlerPtr = vsgInputHandler.get();
         
         // Store debugger for summary
-        eventDebuggerPtr = eventDebugger.get();
+        // eventDebuggerPtr = eventDebugger.get();
+        eventDebuggerPtr = nullptr;
 #else
         inputHandler = std::make_unique<InputHandler>(controller.get(), visualizer.get());
         inputHandlerPtr = inputHandler.get();
@@ -174,6 +190,7 @@ public:
         std::cout << "WASD     - Move robot (manual mode only)" << std::endl;
         std::cout << "C        - Cycle camera modes" << std::endl;
         std::cout << "V        - Cycle debug verbosity" << std::endl;
+        std::cout << "N/M      - Increase/Decrease noise level" << std::endl;
         std::cout << "ESC      - Exit simulation" << std::endl;
         std::cout << "================\n" << std::endl;
         
@@ -183,12 +200,7 @@ public:
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         
         int frame = 0;
-        std::cout << "Entering render loop..." << std::endl;
         while (!visualizer->shouldClose() && !g_shouldExit) { // Run until user closes
-            if (frame < 5) {
-                std::cout << "Frame " << frame << ": shouldClose=" << visualizer->shouldClose() 
-                          << " g_shouldExit=" << g_shouldExit << std::endl;
-            }
             auto currentTime = std::chrono::high_resolution_clock::now();
             double deltaTime = std::chrono::duration<double>(currentTime - lastTime).count();
             lastTime = currentTime;
@@ -207,15 +219,26 @@ public:
 
                 // Update robot
                 robot->update(fixedTimeStep);
+                
+                // Log critical info when noise is active
+                static int physicsUpdateCounter = 0;
+                if (++physicsUpdateCounter % 600 == 0 && NoiseManager::getInstance().getNoiseLevel() > 0.0f) {
+                    vsg_vec3 pos = robot->getPosition();
+                    vsg_vec3 vel = robot->getVelocity();
+                    std::cout << "\n[PHYSICS UPDATE] Time=" << std::fixed << std::setprecision(1) 
+                             << physicsUpdateCounter * fixedTimeStep 
+                             << "s, Pos=(" << pos.x << "," << pos.y << "," << pos.z 
+                             << "), Vel=" << vsg::length(vel) << "m/s" << std::endl;
+                }
 
                 accumulator -= fixedTimeStep;
             }
             
             // Ground clamping - do this once per frame, not per physics step
             const dReal* bodyPos = dBodyGetPosition(robot->getBody());
-            const float minBodyHeight = 0.61f;  // Proper height for feet to reach ground
+            const float minBodyHeight = 0.7f;  // Increased height to ensure body doesn't touch ground
             
-            // Simple height clamping
+            // Simple height clamping with buffer zone
             if (bodyPos[2] < minBodyHeight) {
                 dBodySetPosition(robot->getBody(), bodyPos[0], bodyPos[1], minBodyHeight);
                 const dReal* vel = dBodyGetLinearVel(robot->getBody());
@@ -263,15 +286,6 @@ public:
             frameCount++;
             frame++;
             
-            // Debug: print every 300 frames (5 seconds at 60 FPS)
-            if (frame % 300 == 0) {
-                std::cout << "[MAIN] Still running... Frame: " << frame << std::endl;
-                
-                // Print event summary if debugger is available
-                if (eventDebuggerPtr) {
-                    eventDebuggerPtr->printSummary();
-                }
-            }
         }
         
         std::cout << "Rendered " << frame << " frames before exit" << std::endl;
@@ -434,6 +448,17 @@ private:
             default: controlMode = "UNKNOWN"; break;
         }
         
+        // Get movement commands if manual control is active
+        vsg_vec3 moveCmd(0.0f, 0.0f, 0.0f);
+        float rotCmd = 0.0f;
+        if (inputHandlerPtr && inputHandlerPtr->isManualControlActive()) {
+            moveCmd = inputHandlerPtr->getMovementVector();
+            rotCmd = inputHandlerPtr->getRotationSpeed();
+        }
+        
+        // Get sensor status
+        auto sensorStatus = controller->getSensorStatus();
+        
         // Update visualizer text overlay
         visualizer->updateStatsText(
             fps, 
@@ -441,7 +466,12 @@ private:
             pos, 
             vel, 
             stable, 
-            controlMode
+            controlMode,
+            moveCmd,
+            rotCmd,
+            sensorStatus.footContacts,
+            sensorStatus.angularVelocity,
+            sensorStatus.averageJointVelocity
         );
         
         // Update controls visibility
@@ -450,35 +480,7 @@ private:
             visualizer->setTextVisible(inputHandlerPtr->shouldShowStats(), inputHandlerPtr->shouldShowHelp());
         }
         
-        // Display status update every 1 second (60 frames at 60 FPS)
-        static int statusCounter = 0;
-        if (++statusCounter % 60 == 0) {
-            // Clear line and show compact status with color coding
-            std::cout << "\r\033[K"; // Clear line
-            
-            // Color code the control mode
-            if (controller->getControlMode() == RobotController::MANUAL && inputHandlerPtr && inputHandlerPtr->isManualControlActive()) {
-                std::cout << "\033[1;32m[MANUAL ACTIVE]\033[0m "; // Bright green
-            } else if (controller->getControlMode() == RobotController::MANUAL) {
-                std::cout << "\033[1;33m[MANUAL INACTIVE]\033[0m "; // Yellow  
-            } else {
-                std::cout << "\033[1;36m[AUTONOMOUS]\033[0m "; // Cyan
-            }
-            
-            std::cout << "Pos(" << std::fixed << std::setprecision(1) 
-                      << pos.x << "," << pos.y << "," << pos.z << ") "
-                      << "| Speed: " << std::setprecision(1) << vsg::length(vel) << "m/s ";
-            
-            // Show manual control values if active
-            if (inputHandlerPtr && inputHandlerPtr->isManualControlActive()) {
-                vsg::vec3 mv = inputHandlerPtr->getMovementVector();
-                std::cout << "| Cmd(" << std::setprecision(1) << mv.x << "," << mv.y << ") ";
-            }
-            
-            std::cout << "| FPS: " << std::setprecision(0) << fps
-                      << "| Stable: " << (stable ? "\033[32mYES\033[0m" : "\033[31mNO\033[0m")
-                      << std::flush;
-        }
+        // Remove console status output - now displayed in overlay
         
         // Only warn about critical issues
         if (pos.z < 0.1f) {

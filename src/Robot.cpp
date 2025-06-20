@@ -1,5 +1,9 @@
 #include "Robot.h"
 #include "DebugOutput.h"
+#include "Sensor.h"
+#include "Actuator.h"
+#include "PhysicsWorld.h"
+#include "NoiseManager.h"
 #include <array>
 #include <iostream>
 #include <sstream>
@@ -35,6 +39,10 @@ Robot::Robot(dWorldID world, dSpaceID space,
     dGeomID geom = dCreateBox(space, config.bodySize.x, config.bodySize.y, config.bodySize.z);
     dGeomSetBody(geom, bodyId);
     bodyGeom = geom;
+    
+    // Initialize sensors and actuators
+    createSensors();
+    createActuators();
     
     // Initialize visual representation
     createVisualModel();
@@ -382,10 +390,23 @@ vsg_vec3 Robot::getLegPosition(int legIndex) const {
 }
 
 void Robot::update(double deltaTime) {
+    // Update noise manager time
+    NoiseManager::getInstance().updateTime(deltaTime);
+    
     // Enhanced update with proper physics/rendering sync
     updateLegPositions();
     applyForces();
     maintainBalance();
+    
+    // Update all sensors
+    updateSensors(deltaTime);
+    
+    // Update all actuators
+    for (auto& [name, actuator] : actuators) {
+        if (actuator) {
+            actuator->update(deltaTime);
+        }
+    }
     
     // Update visual transform to match physics body
 #ifndef USE_OPENGL_FALLBACK
@@ -464,7 +485,10 @@ void Robot::applyForces() {
 }
 
 void Robot::maintainBalance() {
-    // Enhanced PID-based balance control
+    // Enhanced PID-based balance control with debug info
+    static int balanceCounter = 0;
+    balanceCounter++;
+    
     const dReal* q = dBodyGetQuaternion(bodyId);
     vsg_quat orientation(q[1], q[2], q[3], q[0]);
     
@@ -476,6 +500,14 @@ void Robot::maintainBalance() {
     vsg_vec3 euler = eulerAnglesFromQuat(orientation);
     float rollError = euler.x;   // Target is 0
     float pitchError = euler.y;  // Target is 0
+    
+    // Debug output when noise is active
+    float noiseLevel = NoiseManager::getInstance().getNoiseLevel();
+    if (balanceCounter % 120 == 0 && noiseLevel > 0.0f) {
+        std::cout << "\n[Robot::maintainBalance] Noise=" << noiseLevel 
+                  << ", Roll=" << std::fixed << std::setprecision(1) << rollError * 180.0f/M_PI 
+                  << "°, Pitch=" << pitchError * 180.0f/M_PI << "°" << std::endl;
+    }
     
     // PID control for stabilization
     static float rollIntegral = 0.0f;
@@ -637,27 +669,61 @@ void Robot::setBodyColor(const vsg_vec4& color) {
 }
 
 void Robot::applyControl(const std::vector<float>& motorCommands) {
-    // Enhanced control for 3-segment legs with proper joint motor control
+    // Motor control using the new actuator system
     if (motorCommands.size() >= NUM_LEGS * 3) {  // 3 joints per leg
+        
+        // Apply commands through actuators
         for (int legIdx = 0; legIdx < NUM_LEGS && legIdx * 3 + 2 < motorCommands.size(); ++legIdx) {
             if (legs[legIdx].segments.size() >= 3) {
-                float hipTorque   = motorCommands[legIdx * 3 + 0] * 2.0f;
-                float kneeTorque  = motorCommands[legIdx * 3 + 1] * 1.5f;
-                float ankleTorque = motorCommands[legIdx * 3 + 2] * 1.0f;
+                // Get motor commands for this leg
+                float hipCmd   = motorCommands[legIdx * 3 + 0];
+                float kneeCmd  = motorCommands[legIdx * 3 + 1];
+                float ankleCmd = motorCommands[legIdx * 3 + 2];
                 
-                // Apply actual joint motor control to individual joints using enum indices
-                dJointAddHingeTorque(legs[legIdx].segments[static_cast<int>(LegSegmentIndex::FEMUR)].joint, kneeTorque);   
-                dJointAddHingeTorque(legs[legIdx].segments[static_cast<int>(LegSegmentIndex::TIBIA)].joint, ankleTorque);  
+                // Hip joint (seg0) is a ball joint - apply torque directly
+                if (legs[legIdx].segments.size() > 0) {
+                    dJointID hipJoint = legs[legIdx].segments[0].joint;
+                    if (hipJoint && hipCmd != 0.0f) {
+                        // Apply torque around vertical axis for turning
+                        dBodyID body = legs[legIdx].segments[0].body;
+                        if (body) {
+                            dBodyAddTorque(body, 0, 0, hipCmd * 5.0f);
+                        }
+                    }
+                }
                 
-                // Hip joint is a ball joint - apply enhanced multi-axis torques
-                if (std::abs(hipTorque) > 0.1f) {
-                    dBodyID coxaBody = legs[legIdx].segments[static_cast<int>(LegSegmentIndex::COXA)].body;
-                    
-                    // Apply torque in multiple axes for realistic hip movement
-                    dBodyAddTorque(coxaBody, 
-                        hipTorque * 0.3f,  // X-axis (forward/backward swing)
-                        hipTorque * 0.2f,  // Y-axis (abduction/adduction)  
-                        hipTorque * 0.5f); // Z-axis (rotation)
+                // Apply to knee motor (femur) - this is a hinge joint
+                std::string kneeMotorName = "leg" + std::to_string(legIdx) + "_seg1_motor";
+                if (auto* kneeMotor = getActuator(kneeMotorName)) {
+                    Actuator::Command cmd;
+                    cmd.timestamp = 0;
+                    // Add visible noise when noise level > 0 by setting target velocity
+                    float noiseLevel = NoiseManager::getInstance().getNoiseLevel();
+                    if (noiseLevel > 0.0f && std::abs(kneeCmd) < 0.01f) {
+                        // When no command, add pure noise motion
+                        cmd.targetValue = 0.0f; // Let noise in actuator do the work
+                    } else {
+                        cmd.targetValue = kneeCmd * 3.0f;
+                    }
+                    cmd.maxEffort = 8.0f;
+                    kneeMotor->applyCommand(cmd);
+                }
+                
+                // Apply to ankle motor (tibia) - this is a hinge joint
+                std::string ankleMotorName = "leg" + std::to_string(legIdx) + "_seg2_motor";
+                if (auto* ankleMotor = getActuator(ankleMotorName)) {
+                    Actuator::Command cmd;
+                    cmd.timestamp = 0;
+                    // Add visible noise when noise level > 0
+                    float noiseLevel = NoiseManager::getInstance().getNoiseLevel();
+                    if (noiseLevel > 0.0f && std::abs(ankleCmd) < 0.01f) {
+                        // When no command, add pure noise motion
+                        cmd.targetValue = 0.0f; // Let noise in actuator do the work
+                    } else {
+                        cmd.targetValue = ankleCmd * 2.0f;
+                    }
+                    cmd.maxEffort = 5.0f;
+                    ankleMotor->applyCommand(cmd);
                 }
             }
         }
@@ -712,6 +778,154 @@ vsg_vec3 Robot::eulerAnglesFromQuat(const vsg_quat& q) const {
     euler.z = std::atan2(siny_cosp, cosy_cosp);
     
     return euler;
+}
+
+void Robot::createSensors() {
+    // Clear any existing sensors
+    sensors.clear();
+    footContactSensors.clear();
+    jointPositionSensors.clear();
+    jointVelocitySensors.clear();
+    
+    // Create IMU sensor on main body
+    auto imu = std::make_unique<IMUSensor>("body_imu", bodyId);
+    imu->setNoise(0.0f, 0.01f); // Small noise for realism
+    imuSensor = imu.get();
+    sensors["body_imu"] = std::move(imu);
+    
+    // Create sensors for each leg
+    for (int legIdx = 0; legIdx < NUM_LEGS; ++legIdx) {
+        const auto& leg = legs[legIdx];
+        
+        // Create foot contact sensor for tibia segment
+        if (leg.segments.size() >= 3 && leg.segments[2].footGeom) {
+            std::string contactName = "foot_contact_" + std::to_string(legIdx);
+            auto contact = std::make_unique<ContactSensor>(
+                contactName, 
+                leg.segments[2].footGeom, 
+                nullptr  // Will be set later when physics world is available
+            );
+            footContactSensors.push_back(contact.get());
+            sensors[contactName] = std::move(contact);
+        }
+        
+        // Create joint sensors for each segment
+        for (size_t segIdx = 0; segIdx < leg.segments.size(); ++segIdx) {
+            const auto& segment = leg.segments[segIdx];
+            if (!segment.joint) continue;
+            
+            std::string baseName = "leg" + std::to_string(legIdx) + "_seg" + std::to_string(segIdx);
+            
+            // Position sensor
+            auto posSensor = std::make_unique<JointPositionSensor>(
+                baseName + "_pos", 
+                segment.joint
+            );
+            posSensor->setNoise(0.0f, 0.001f); // 1 milliradian noise
+            jointPositionSensors.push_back(posSensor.get());
+            sensors[baseName + "_pos"] = std::move(posSensor);
+            
+            // Velocity sensor
+            auto velSensor = std::make_unique<JointVelocitySensor>(
+                baseName + "_vel", 
+                segment.joint
+            );
+            velSensor->setNoise(0.0f, 0.01f); // Small velocity noise
+            jointVelocitySensors.push_back(velSensor.get());
+            sensors[baseName + "_vel"] = std::move(velSensor);
+        }
+    }
+    
+    DEBUG_INFO("Created " + std::to_string(sensors.size()) + " sensors for robot");
+}
+
+void Robot::setPhysicsWorld(PhysicsWorld* world) {
+    // Set physics world for contact sensors
+    for (auto& contactSensor : footContactSensors) {
+        if (auto* sensor = dynamic_cast<ContactSensor*>(contactSensor)) {
+            sensor->setPhysicsWorld(world);
+        }
+    }
+}
+
+void Robot::createActuators() {
+    // Clear any existing actuators
+    actuators.clear();
+    jointMotors.clear();
+    
+    // Create actuators for each leg joint
+    for (int legIdx = 0; legIdx < NUM_LEGS; ++legIdx) {
+        const auto& leg = legs[legIdx];
+        
+        for (size_t segIdx = 0; segIdx < leg.segments.size(); ++segIdx) {
+            const auto& segment = leg.segments[segIdx];
+            if (!segment.joint) continue;
+            
+            std::string motorName = "leg" + std::to_string(legIdx) + 
+                                   "_seg" + std::to_string(segIdx) + "_motor";
+            
+            // Skip motor creation for ball joints (hip/coxa) - they can't be velocity controlled
+            if (segIdx == 0) {
+                // Hip is a ball joint - skip motor creation
+                // Ball joints will be controlled directly with torques in applyControl
+                continue;
+            }
+            
+            // Create velocity-controlled motor for hinge joints only
+            auto motor = std::make_unique<VelocityMotor>(motorName, segment.joint);
+            
+            // Set appropriate limits based on segment type
+            if (segIdx == 1) {  // Knee/femur joint
+                motor->setVelocityLimit(7.0f);
+                motor->setEffortLimit(12.0f);
+            } else {  // Ankle/tibia joint
+                motor->setVelocityLimit(7.0f);
+                motor->setEffortLimit(10.0f);
+            }
+            
+            jointMotors.push_back(motor.get());
+            actuators[motorName] = std::move(motor);
+        }
+    }
+    
+    DEBUG_INFO("Created " + std::to_string(actuators.size()) + " actuators for robot");
+}
+
+void Robot::updateSensors(double deltaTime) {
+    // Update all sensors
+    for (auto& [name, sensor] : sensors) {
+        if (sensor) {
+            sensor->update(deltaTime);
+        }
+    }
+}
+
+Sensor* Robot::getSensor(const std::string& name) {
+    auto it = sensors.find(name);
+    return (it != sensors.end()) ? it->second.get() : nullptr;
+}
+
+Actuator* Robot::getActuator(const std::string& name) {
+    auto it = actuators.find(name);
+    return (it != actuators.end()) ? it->second.get() : nullptr;
+}
+
+std::vector<std::string> Robot::getSensorNames() const {
+    std::vector<std::string> names;
+    names.reserve(sensors.size());
+    for (const auto& [name, sensor] : sensors) {
+        names.push_back(name);
+    }
+    return names;
+}
+
+std::vector<std::string> Robot::getActuatorNames() const {
+    std::vector<std::string> names;
+    names.reserve(actuators.size());
+    for (const auto& [name, actuator] : actuators) {
+        names.push_back(name);
+    }
+    return names;
 }
 
 void Robot::createVisualModel() {

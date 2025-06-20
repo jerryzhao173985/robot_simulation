@@ -110,7 +110,7 @@ void PhysicsWorld::handleCollision(dGeomID o1, dGeomID o2) {
     // Debug: Check if this is a ground collision with detailed info
     static int frameCount = 0;
     bool isGroundCollision = (o1 == groundPlane || o2 == groundPlane);
-    if (isGroundCollision && frameCount++ % 60 == 0) {
+    if (isGroundCollision && frameCount++ % 600 == 0) { // Reduced frequency: every 10 seconds at 60Hz
         dGeomID obj = (o1 == groundPlane) ? o2 : o1;
         const dReal* pos = dGeomGetPosition(obj);
         int geomClass = dGeomGetClass(obj);
@@ -122,18 +122,19 @@ void PhysicsWorld::handleCollision(dGeomID o1, dGeomID o2) {
         DEBUG_PHYSICS(ss.str());
     }
     
-    // Maximum number of contact points
-    const int maxContacts = 32;
+    // Maximum number of contact points - reduced for better performance
+    // 32 is usually overkill, 8-16 is typically sufficient for most cases
+    const int maxContacts = 16;
     dContact contact[maxContacts];
     
     // Get contact points
     int numContacts = dCollide(o1, o2, maxContacts, &contact[0].geom, sizeof(dContact));
     
     if (numContacts > 0) {
-        // Log ground contacts for debugging
-        if (isGroundCollision) {
+        // Log ground contacts for debugging - only log excessive contacts
+        if (isGroundCollision && numContacts > 20) { // Only log when there are many contacts
             std::stringstream ss;
-            ss << "Creating " << numContacts << " contact joints for ground collision";
+            ss << "[WARNING] Creating " << numContacts << " contact joints for ground collision (excessive)";
             DEBUG_PHYSICS(ss.str());
         }
         
@@ -171,9 +172,9 @@ void PhysicsWorld::handleCollision(dGeomID o1, dGeomID o2) {
                 dJointAttach(c, b1, b2);  // Both dynamic
             }
             
-            if (isGroundCollision && i == 0) {
+            if (isGroundCollision && i == 0 && contact[i].geom.depth > 0.01f) { // Only log significant penetrations
                 std::stringstream ss;
-                ss << "Contact at Z=" << contact[i].geom.pos[2] 
+                ss << "[WARNING] Deep contact at Z=" << contact[i].geom.pos[2] 
                    << " depth=" << contact[i].geom.depth;
                 DEBUG_PHYSICS(ss.str());
             }
@@ -530,6 +531,58 @@ bool PhysicsWorld::checkRaycast(const vsg_vec3& start, const vsg_vec3& direction
     
     dGeomDestroy(ray);
     return hit;
+}
+
+PhysicsWorld::RaycastResult PhysicsWorld::raycast(const vsg_vec3& origin, const vsg_vec3& direction, float maxDistance) {
+    RaycastResult result;
+    result.hit = false;
+    result.distance = maxDistance;
+    
+    // Normalize direction
+    vsg_vec3 dir = vsg::normalize(direction);
+    
+    // Create temporary ray
+    dGeomID ray = dCreateRay(space, maxDistance);
+    dGeomRaySet(ray, origin.x, origin.y, origin.z, dir.x, dir.y, dir.z);
+    
+    // Check collision with all objects
+    float closestDistance = maxDistance;
+    dContactGeom closestContact;
+    dGeomID closestGeom = nullptr;
+    
+    // Check ground plane first
+    if (groundPlane) {
+        dContactGeom contact;
+        int numContacts = dCollide(ray, groundPlane, 1, &contact, sizeof(dContactGeom));
+        if (numContacts > 0 && contact.depth < closestDistance) {
+            closestDistance = contact.depth;
+            closestContact = contact;
+            closestGeom = groundPlane;
+        }
+    }
+    
+    // Check all other objects
+    for (const auto& obj : objects) {
+        dContactGeom contact;
+        int numContacts = dCollide(ray, obj.geom, 1, &contact, sizeof(dContactGeom));
+        if (numContacts > 0 && contact.depth < closestDistance) {
+            closestDistance = contact.depth;
+            closestContact = contact;
+            closestGeom = obj.geom;
+        }
+    }
+    
+    // Fill result if hit
+    if (closestGeom) {
+        result.hit = true;
+        result.distance = closestDistance;
+        result.point = vsg_vec3(closestContact.pos[0], closestContact.pos[1], closestContact.pos[2]);
+        result.normal = vsg_vec3(closestContact.normal[0], closestContact.normal[1], closestContact.normal[2]);
+        result.geom = closestGeom;
+    }
+    
+    dGeomDestroy(ray);
+    return result;
 }
 
 #ifndef USE_OPENGL_FALLBACK
