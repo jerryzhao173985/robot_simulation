@@ -67,8 +67,8 @@ public:
 
         // Create physics world
         physicsWorld = std::make_unique<PhysicsWorld>();
-        physicsWorld->setGravity(vsg_vec3(0.0f, 0.0f, -9.81f));
-        physicsWorld->setGroundFriction(1.2f);
+        physicsWorld->setGravity(vsg_vec3(0.0f, 0.0f, -2.0f)); // Reduced gravity for stability
+        physicsWorld->setGroundFriction(2.0f);  // High friction
         physicsWorld->enableAdaptiveStepping(true);
 
         // Create terrain
@@ -92,7 +92,7 @@ public:
 
         // Create robot controller
         controller = std::make_unique<RobotController>(robot.get(), physicsWorld.get());
-        controller->setControlMode(RobotController::AUTONOMOUS);
+        controller->setControlMode(RobotController::MANUAL);  // Manual control for stability
         controller->enableObstacleAvoidance(true);
         controller->enableDynamicStability(true);
 
@@ -100,10 +100,13 @@ public:
         addObstacles();
         
 
-        // Setup camera
-        visualizer->setCameraPosition(vsg_vec3(20.0f, 20.0f, 20.0f));
-        visualizer->setCameraTarget(vsg_vec3(0.0f, 0.0f, 0.0f));
+        // Setup camera to look at robot initial position
+        float robotInitialZ = 0.95f; // From Robot::createBody()
+        visualizer->setCameraPosition(vsg_vec3(5.0f, 5.0f, robotInitialZ + 2.0f));
+        visualizer->setCameraTarget(vsg_vec3(0.0f, 0.0f, robotInitialZ));
         visualizer->enableCameraFollow(false);
+        
+        std::cout << "Camera looking at robot initial position Z=" << robotInitialZ << std::endl;
 
         // Enable visual effects
         visualizer->enablePostProcessing(true);
@@ -119,12 +122,12 @@ public:
         double accumulator = 0.0;
         const double fixedTimeStep = 1.0 / 60.0; // 60 Hz physics
 
-        // Set initial navigation goal
-        RobotController::NavigationGoal goal;
-        goal.position = makePosition(10.0f, 0.0f, 10.0f);
-        goal.speed = 1.0f;
-        goal.tolerance = 0.5f;
-        controller->setNavigationGoal(goal);
+        // Navigation goal disabled for visual testing
+        // RobotController::NavigationGoal goal;
+        // goal.position = makePosition(10.0f, 0.0f, 10.0f);
+        // goal.speed = 1.0f;
+        // goal.tolerance = 0.5f;
+        // controller->setNavigationGoal(goal);
 
         std::cout << "Starting main render loop..." << std::endl;
         
@@ -165,10 +168,10 @@ public:
             vsg_quat robotOrient = robot->getOrientation();
             visualizer->updateRobotTransform(robotPos, robotOrient);
             
-            // Check if robot reached goal and set new one
-            if (controller->hasReachedGoal()) {
-                setRandomNavigationGoal();
-            }
+            // Check if robot reached goal and set new one (disabled for visual testing)
+            // if (controller->hasReachedGoal()) {
+            //     setRandomNavigationGoal();
+            // }
 
             // Handle keyboard input
             handleInput();

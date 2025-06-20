@@ -114,17 +114,17 @@ void PhysicsWorld::handleCollision(dGeomID o1, dGeomID o2) {
             // Set contact parameters
             contact[i].surface.mode = dContactBounce | dContactSoftCFM | dContactSoftERP | dContactApprox1;
             
-            // Friction
-            contact[i].surface.mu = groundFriction;
-            contact[i].surface.mu2 = groundFriction;
+            // Friction - high for stable standing
+            contact[i].surface.mu = groundFriction * 2.0f;  // Increase friction
+            contact[i].surface.mu2 = groundFriction * 2.0f;
             
-            // Bounce
-            contact[i].surface.bounce = groundBounce;
-            contact[i].surface.bounce_vel = 0.1f;
+            // Bounce - reduce to prevent instability
+            contact[i].surface.bounce = groundBounce * 0.1f;  // Less bounce
+            contact[i].surface.bounce_vel = 0.01f;  // Lower bounce threshold
             
-            // Softness
-            contact[i].surface.soft_cfm = contactSoftness;
-            contact[i].surface.soft_erp = 0.2f;
+            // Softness - stiffer contacts for stability
+            contact[i].surface.soft_cfm = contactSoftness * 0.1f;  // Stiffer
+            contact[i].surface.soft_erp = 0.8f;  // Higher error reduction
             
             // Create contact joint
             dJointID c = dJointCreateContact(world, contactGroup, &contact[i]);

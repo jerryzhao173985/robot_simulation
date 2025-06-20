@@ -1,5 +1,9 @@
 #include "Visualizer.h"
+#include "VisualizerHexapodConfig.h"
 #include <iostream>
+
+// Debug control
+// #define DEBUG_VISUALIZER
 
 
  #ifdef USE_OPENGL_FALLBACK
@@ -286,7 +290,11 @@ void Visualizer::render() {
     // Frame
     if (viewer->advanceToNextFrame()) {
         viewer->handleEvents();
+        
+        // IMPORTANT: viewer->update() must be called AFTER all transforms are updated
+        // The transforms should be updated before this render() call
         viewer->update();
+        
         viewer->recordAndSubmit();
         viewer->present();
     }
@@ -788,6 +796,29 @@ void Visualizer::updateRobotTransform(const vsg_vec3& position, const vsg_quat& 
         // Create transform matrix: translation * rotation
         vsg::dmat4 transMatrix = vsg::translate(vsg::dvec3(position.x, position.y, position.z));
         robotTransform->matrix = transMatrix * rotMatrix;
+        
+        // Force VSG to update by marking as modified
+        // In VSG, transforms are automatically updated when matrix changes
+        
+        // Debug output - every frame for the first 180 frames to see what's happening
+        static int frameCount = 0;
+        if (frameCount < 180 || frameCount % 60 == 0) {
+            std::cout << "Frame " << frameCount << " - Robot transform updated:" << std::endl;
+            std::cout << "  Position: (" << position.x << ", " << position.y << ", " << position.z << ")" << std::endl;
+            std::cout << "  Orientation: (" << orientation.x << ", " << orientation.y << ", " << orientation.z << ", " << orientation.w << ")" << std::endl;
+            std::cout << "  Transform ptr: " << robotTransform.get() << " Matrix ptr: " << &robotTransform->matrix << std::endl;
+            
+            // Print first few values of the matrix to verify it's being set
+            auto& m = robotTransform->matrix;
+            std::cout << "  Matrix[3]: (" << m[3][0] << ", " << m[3][1] << ", " << m[3][2] << ")" << std::endl;
+        }
+        frameCount++;
+    } else {
+        static bool warned = false;
+        if (!warned) {
+            std::cout << "WARNING: robotTransform is null in updateRobotTransform!" << std::endl;
+            warned = true;
+        }
     }
 #endif
 }
@@ -891,6 +922,15 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
     auto builder = vsg::Builder::create();
     builder->options = options;
     
+    // Set up shader set for proper rendering
+    auto shaderSet = vsg::createPhongShaderSet(options);
+    if (!shaderSet) {
+        std::cerr << "Warning: Failed to create Phong shader set. Make sure VSG_FILE_PATH is set." << std::endl;
+        // Try to create a basic shader set
+        shaderSet = vsg::ShaderSet::create();
+    }
+    builder->shaderSet = shaderSet;
+    
     auto scene = vsg::Group::create();
     
     // ------------------------------
@@ -899,11 +939,12 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
     vsg::GeometryInfo geomInfo;
     vsg::StateInfo stateInfo;
     
-    geomInfo.position.set(0.0f, 0.0f, 0.0f);      // centre at world origin
-    geomInfo.dx.set(10.0f, 0.0f, 0.0f);            // X extent (smaller ground for clarity)
+    geomInfo.position.set(0.0f, 0.0f, -0.01f);     // slightly below Z=0
+    geomInfo.dx.set(10.0f, 0.0f, 0.0f);            // X extent
     geomInfo.dy.set(0.0f, 10.0f, 0.0f);            // Y extent
+    geomInfo.color = vsg::vec4(0.7f, 0.7f, 0.7f, 1.0f); // Light gray
     
-    // Ground appearance - light grey
+    // Ground appearance
     stateInfo.lighting = true;
     auto groundNode = builder->createQuad(geomInfo, stateInfo);
     scene->addChild(groundNode);
@@ -914,32 +955,45 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
     const double bodyLength = 1.2;      // realistic hexapod body length
     const double bodyWidth  = 0.6;      // body width
     const double bodyHeight = 0.3;      // body height
-    const double bodyZ = 0.8;           // body center height (allowing legs to reach ground)
+    
+    // Calculate initial Z position to match Robot.cpp physics initialization
+    const double coxaLength = 0.25;
+    const double femurLength = 0.35;
+    const double tibiaLength = 0.4;
+    const double totalLegLength = coxaLength + femurLength + tibiaLength;
+    const double bodyZ = bodyHeight * 0.5 + totalLegLength * 0.8;  // Match Robot::createBody() line 91
     
     // Create robot transform that will be updated with physics position
     robotTransform = vsg::MatrixTransform::create();
-    robotTransform->matrix = vsg::translate(0.0, 0.0, 0.0); // Will be updated by physics
+    // Start at the expected physics position to ensure it's visible from the start
+    robotTransform->matrix = vsg::translate(0.0, 0.0, bodyZ);
+    
+    std::cout << "Created robotTransform at initial Z=" << bodyZ << std::endl;
+    std::cout << "Initial matrix translation: (" << robotTransform->matrix[3][0] << ", " 
+              << robotTransform->matrix[3][1] << ", " << robotTransform->matrix[3][2] << ")" << std::endl;
     
     geomInfo.position.set(0.0f, 0.0f, 0.0f);  // Body at robot's local origin
     geomInfo.dx.set(static_cast<float>(bodyLength * 0.5), 0.0f, 0.0f);     // half-length
     geomInfo.dy.set(0.0f, static_cast<float>(bodyWidth * 0.5), 0.0f);      // half-width  
     geomInfo.dz.set(0.0f, 0.0f, static_cast<float>(bodyHeight * 0.5));     // half-height
+    geomInfo.color = vsg::vec4(0.3f, 0.3f, 0.8f, 1.0f); // Blue-gray robot body
     
-    // Create body state for proper material
+    // Create body state for proper material with bright color
     vsg::StateInfo bodyStateInfo;
     bodyStateInfo.lighting = true;
-    // Explicitly set body material
     bodyStateInfo.wireframe = false;
+    bodyStateInfo.two_sided = true; // Render both sides in case of culling issues
     
     auto bodyNode = builder->createBox(geomInfo, bodyStateInfo);
     robotTransform->addChild(bodyNode);
+    
+    // Reset transform to identity after body creation
+    geomInfo.transform = vsg::dmat4();
 
     // ------------------------------
     // Hexapod legs - proper 3-segment design with natural angles
     // ------------------------------
-    const double coxaLength  = 0.25;    // coxa (hip) segment
-    const double femurLength = 0.35;    // femur (thigh) segment  
-    const double tibiaLength = 0.4;     // tibia (shin) segment
+    // Using leg dimensions already defined above for consistency
     const double segmentRadius = 0.04;  // consistent segment thickness
 
     // Define leg and joint colors
@@ -977,54 +1031,125 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
             double rootZ = -bodyHeight * 0.5;             // attach legs at body bottom
             legRoot->matrix = vsg::translate(rootX, rootY, rootZ);
             
-            // ======= COXA (hip segment) =======
-            // Angled outward and slightly downward for natural stance
-            auto coxaXform = vsg::MatrixTransform::create();
-            double coxaAngle = sideSign * vsg::radians(45.0); // 45° outward
-            coxaXform->matrix = vsg::rotate(coxaAngle, 0.0, 0.0, 1.0); // rotate around Z
+            // Calculate leg segment orientations for natural hexapod stance
+            // Using configuration for spider-like appearance
+            double coxaAngle = sideSign * vsg::radians(HexapodVisualConfig::COXA_SPREAD_ANGLE);
             
+            // ======= COXA (hip segment) =======
+            // Calculate coxa direction: slightly upward and outward for natural stance
+            double coxaUpAngle = vsg::radians(HexapodVisualConfig::COXA_ELEVATION);
+            vsg::dvec3 coxaDir(
+                cos(coxaAngle) * cos(coxaUpAngle),
+                sin(coxaAngle) * cos(coxaUpAngle),
+                sin(coxaUpAngle)  // Slight upward component
+            );
+            vsg::dvec3 coxaStart(0.0, 0.0, 0.0);
+            vsg::dvec3 coxaEnd = coxaStart + coxaDir * coxaLength;
+            vsg::dvec3 coxaCenter = (coxaStart + coxaEnd) * 0.5;
+            
+            // Calculate rotation from Z-axis to coxa direction
+            vsg::dvec3 zAxis(0.0, 0.0, 1.0);
+            vsg::dvec3 rotAxis = vsg::cross(zAxis, coxaDir);
+            double rotAngle = acos(vsg::dot(zAxis, coxaDir));
+            
+            // Set up coxa geometry with proper transform
             geomInfo.position.set(0.0f, 0.0f, 0.0f);
             geomInfo.dx.set(static_cast<float>(segmentRadius), 0.0f, 0.0f);
             geomInfo.dy.set(0.0f, static_cast<float>(segmentRadius), 0.0f);
-            geomInfo.dz.set(0.0f, static_cast<float>(coxaLength), 0.0f); // extends in +Y direction
+            geomInfo.dz.set(0.0f, 0.0f, static_cast<float>(coxaLength));
             geomInfo.color = legColor;
+            geomInfo.transform = vsg::rotate(rotAngle, rotAxis);
+            
             auto coxaNode = builder->createCylinder(geomInfo, legState);
+            auto coxaXform = vsg::MatrixTransform::create();
+            coxaXform->matrix = vsg::translate(coxaCenter);
             coxaXform->addChild(coxaNode);
             legRoot->addChild(coxaXform);
             
             // ======= FEMUR (thigh segment) =======
-            // Angled downward and forward for natural walking pose
-            auto femurXform = vsg::MatrixTransform::create();
-            femurXform->matrix = 
-                vsg::translate(0.0, coxaLength, 0.0) *           // move to end of coxa
-                vsg::rotate(vsg::radians(-30.0), 1.0, 0.0, 0.0); // tilt down 30°
+            // Femur extends mostly horizontally with natural curve
+            double femurDownAngle = vsg::radians(HexapodVisualConfig::FEMUR_DOWN_ANGLE);
+            // Leg-pair specific angles for natural spider-like pose
+            double legPairOffset = 0.0;
+            if (legPair == 0) legPairOffset = vsg::radians(HexapodVisualConfig::FRONT_LEG_FORWARD);
+            else if (legPair == 1) legPairOffset = vsg::radians(HexapodVisualConfig::MIDDLE_LEG_OFFSET);
+            else if (legPair == 2) legPairOffset = vsg::radians(HexapodVisualConfig::REAR_LEG_BACKWARD);
+            double femurRadialAngle = coxaAngle + legPairOffset;
+            vsg::dvec3 femurDir(
+                cos(femurRadialAngle) * cos(femurDownAngle),  // X: radial direction * horizontal component
+                sin(femurRadialAngle) * cos(femurDownAngle),  // Y: radial direction * horizontal component
+                -sin(femurDownAngle)                           // Z: slight downward component
+            );
+            vsg::dvec3 femurStart = coxaEnd;
+            vsg::dvec3 femurEnd = femurStart + femurDir * femurLength;
+            vsg::dvec3 femurCenter = (femurStart + femurEnd) * 0.5;
             
+            // Calculate rotation for femur
+            rotAxis = vsg::cross(zAxis, femurDir);
+            if (vsg::length(rotAxis) > 0.001) {
+                rotAxis = vsg::normalize(rotAxis);
+                rotAngle = acos(vsg::dot(zAxis, femurDir));
+            } else {
+                // Parallel or anti-parallel
+                rotAxis = vsg::dvec3(1.0, 0.0, 0.0);
+                rotAngle = (femurDir.z < 0) ? vsg::PI : 0.0;
+            }
+            
+            // Set up femur geometry
             geomInfo.position.set(0.0f, 0.0f, 0.0f);
             geomInfo.dx.set(static_cast<float>(segmentRadius), 0.0f, 0.0f);
             geomInfo.dy.set(0.0f, static_cast<float>(segmentRadius), 0.0f);
-            geomInfo.dz.set(0.0f, static_cast<float>(femurLength), 0.0f);
+            geomInfo.dz.set(0.0f, 0.0f, static_cast<float>(femurLength));
             geomInfo.color = legColor;
+            geomInfo.transform = vsg::rotate(rotAngle, rotAxis);
+            
             auto femurNode = builder->createCylinder(geomInfo, legState);
+            auto femurXform = vsg::MatrixTransform::create();
+            femurXform->matrix = vsg::translate(femurCenter);
             femurXform->addChild(femurNode);
-            coxaXform->addChild(femurXform);
+            legRoot->addChild(femurXform);
             
             // ======= TIBIA (shin segment) =======
-            // Angled further downward to reach ground
-            auto tibiaXform = vsg::MatrixTransform::create();
-            tibiaXform->matrix = 
-                vsg::translate(0.0, femurLength, 0.0) *          // move to end of femur
-                vsg::rotate(vsg::radians(-45.0), 1.0, 0.0, 0.0); // tilt down another 45°
+            // Tibia angles down steeply to reach ground
+            double tibiaTotalDownAngle = vsg::radians(HexapodVisualConfig::TIBIA_DOWN_ANGLE);
+            // Tibia maintains femur's radial direction but goes down steeply
+            vsg::dvec3 tibiaDir(
+                cos(femurRadialAngle) * cos(tibiaTotalDownAngle),  // X: same radial as femur
+                sin(femurRadialAngle) * cos(tibiaTotalDownAngle),  // Y: same radial as femur
+                -sin(tibiaTotalDownAngle)                           // Z: steep downward
+            );
+            vsg::dvec3 tibiaStart = femurEnd;
+            vsg::dvec3 tibiaEnd = tibiaStart + tibiaDir * tibiaLength;
+            vsg::dvec3 tibiaCenter = (tibiaStart + tibiaEnd) * 0.5;
             
+            // Calculate rotation for tibia
+            rotAxis = vsg::cross(zAxis, tibiaDir);
+            if (vsg::length(rotAxis) > 0.001) {
+                rotAxis = vsg::normalize(rotAxis);
+                rotAngle = acos(vsg::dot(zAxis, tibiaDir));
+            } else {
+                rotAxis = vsg::dvec3(1.0, 0.0, 0.0);
+                rotAngle = (tibiaDir.z < 0) ? vsg::PI : 0.0;
+            }
+            
+            // Set up tibia geometry
             geomInfo.position.set(0.0f, 0.0f, 0.0f);
             geomInfo.dx.set(static_cast<float>(segmentRadius), 0.0f, 0.0f);
             geomInfo.dy.set(0.0f, static_cast<float>(segmentRadius), 0.0f);
-            geomInfo.dz.set(0.0f, static_cast<float>(tibiaLength), 0.0f);
+            geomInfo.dz.set(0.0f, 0.0f, static_cast<float>(tibiaLength));
             geomInfo.color = legColor;
+            geomInfo.transform = vsg::rotate(rotAngle, rotAxis);
+            
             auto tibiaNode = builder->createCylinder(geomInfo, legState);
+            auto tibiaXform = vsg::MatrixTransform::create();
+            tibiaXform->matrix = vsg::translate(tibiaCenter);
             tibiaXform->addChild(tibiaNode);
-            femurXform->addChild(tibiaXform);
+            legRoot->addChild(tibiaXform);
             
             // ======= JOINT SPHERES for visual connection =======
+            // Reset transform to identity for spheres
+            geomInfo.transform = vsg::dmat4();
+            
             // Smaller joint spheres
             float jointRadius = static_cast<float>(segmentRadius * 0.8);
             geomInfo.position.set(0.0f, 0.0f, 0.0f);
@@ -1032,33 +1157,160 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
             geomInfo.dy.set(0.0f, jointRadius, 0.0f);
             geomInfo.dz.set(0.0f, 0.0f, jointRadius);
             
-            // Hip joint
+            // Hip joint at leg root
             geomInfo.color = jointColor;
             auto hipJoint = builder->createSphere(geomInfo, jointState);
             legRoot->addChild(hipJoint);
             
-            // Knee joint 
+            // Knee joint at coxa-femur connection
             auto kneeJointXform = vsg::MatrixTransform::create();
-            kneeJointXform->matrix = vsg::translate(0.0, coxaLength, 0.0);
+            kneeJointXform->matrix = vsg::translate(coxaEnd);
             geomInfo.color = jointColor;
             auto kneeJoint = builder->createSphere(geomInfo, jointState);
             kneeJointXform->addChild(kneeJoint);
-            coxaXform->addChild(kneeJointXform);
+            legRoot->addChild(kneeJointXform);
             
-            // Ankle joint
+            // Ankle joint at femur-tibia connection
             auto ankleJointXform = vsg::MatrixTransform::create();
-            ankleJointXform->matrix = vsg::translate(0.0, femurLength, 0.0);
+            ankleJointXform->matrix = vsg::translate(femurEnd);
             geomInfo.color = jointColor;
             auto ankleJoint = builder->createSphere(geomInfo, jointState);
             ankleJointXform->addChild(ankleJoint);
-            femurXform->addChild(ankleJointXform);
+            legRoot->addChild(ankleJointXform);
+            
+            // Foot at end of tibia
+            auto footXform = vsg::MatrixTransform::create();
+            footXform->matrix = vsg::translate(tibiaEnd);
+            geomInfo.color = vsg::vec4(0.8f, 0.2f, 0.2f, 1.0f); // Red foot
+            float footRadius = static_cast<float>(segmentRadius * 2.0);
+            geomInfo.dx.set(footRadius, 0.0f, 0.0f);
+            geomInfo.dy.set(0.0f, footRadius, 0.0f);
+            geomInfo.dz.set(0.0f, 0.0f, footRadius);
+            auto foot = builder->createSphere(geomInfo, jointState);
+            footXform->addChild(foot);
+            legRoot->addChild(footXform);
             
             robotTransform->addChild(legRoot);
+            
+#ifdef DEBUG_VISUALIZER
+            // Debug output for leg geometry verification
+            int legIdx = legPair * 2 + (side == -1 ? 0 : 1);
+            std::cout << "Leg " << legIdx << " visual geometry:" << std::endl;
+            std::cout << "  Root (world): (" << rootX << ", " << rootY << ", " << bodyZ + rootZ << ")" << std::endl;
+            std::cout << "  Angles: coxa=" << vsg::degrees(coxaAngle) 
+                      << "°, femur down=" << vsg::degrees(femurDownAngle) 
+                      << "°, tibia down=" << vsg::degrees(tibiaTotalDownAngle) << "°" << std::endl;
+            std::cout << "  Segment ends (local to root):" << std::endl;
+            std::cout << "    Coxa: " << coxaEnd << std::endl;
+            std::cout << "    Femur: " << femurEnd << std::endl;
+            std::cout << "    Tibia: " << tibiaEnd << std::endl;
+            std::cout << "  Foot height (world): " << (bodyZ + rootZ + tibiaEnd.z) << std::endl;
+            
+            // Verify direction vectors are normalized
+            std::cout << "  Direction vector magnitudes:" << std::endl;
+            std::cout << "    Coxa dir: " << vsg::length(coxaDir) << " (should be 1.0)" << std::endl;
+            std::cout << "    Femur dir: " << vsg::length(femurDir) << " (should be 1.0)" << std::endl;
+            std::cout << "    Tibia dir: " << vsg::length(tibiaDir) << " (should be 1.0)" << std::endl;
+            
+            // Verify segment connections
+            double coxaGap = vsg::length(femurStart - coxaEnd);
+            double femurGap = vsg::length(tibiaStart - femurEnd);
+            std::cout << "  Segment gaps (should be ~0):" << std::endl;
+            std::cout << "    Coxa-Femur gap: " << coxaGap << std::endl;
+            std::cout << "    Femur-Tibia gap: " << femurGap << std::endl;
+#endif
         }
     }
     
     // Add the complete robot (body + legs) to the scene
     scene->addChild(robotTransform);
+    
+    // NOTE: Architectural Issue - Visual-Physics Transform Sync
+    // The Robot.cpp creates placeholder transforms (legNodes) expecting to update them,
+    // but this Visualizer creates static geometry that doesn't reference those transforms.
+    // For proper dynamic simulation, the visual leg segments should reference the
+    // transforms managed by Robot.cpp, not create independent static geometry.
+    // Current implementation creates visually correct but static hexapod geometry.
+    
+    // Debug: Add coordinate axes at origin
+    auto axesGroup = vsg::Group::create();
+    
+    // X-axis (red)
+    geomInfo.position.set(0.5f, 0.0f, 0.0f);
+    geomInfo.dx.set(0.5f, 0.0f, 0.0f);
+    geomInfo.dy.set(0.0f, 0.02f, 0.0f);
+    geomInfo.dz.set(0.0f, 0.0f, 0.02f);
+    geomInfo.color = vsg::vec4(1.0f, 0.0f, 0.0f, 1.0f);
+    axesGroup->addChild(builder->createBox(geomInfo, bodyStateInfo));
+    
+    // Y-axis (green)
+    geomInfo.position.set(0.0f, 0.5f, 0.0f);
+    geomInfo.dx.set(0.02f, 0.0f, 0.0f);
+    geomInfo.dy.set(0.0f, 0.5f, 0.0f);
+    geomInfo.dz.set(0.0f, 0.0f, 0.02f);
+    geomInfo.color = vsg::vec4(0.0f, 1.0f, 0.0f, 1.0f);
+    axesGroup->addChild(builder->createBox(geomInfo, bodyStateInfo));
+    
+    // Z-axis (blue)
+    geomInfo.position.set(0.0f, 0.0f, 0.5f);
+    geomInfo.dx.set(0.02f, 0.0f, 0.0f);
+    geomInfo.dy.set(0.0f, 0.02f, 0.0f);
+    geomInfo.dz.set(0.0f, 0.0f, 0.5f);
+    geomInfo.color = vsg::vec4(0.0f, 0.0f, 1.0f, 1.0f);
+    axesGroup->addChild(builder->createBox(geomInfo, bodyStateInfo));
+    
+    scene->addChild(axesGroup);
+    
+    // Debug output to verify robot visual was created
+    std::cout << "Robot visual created:" << std::endl;
+    std::cout << "  robotTransform ptr: " << robotTransform.get() << std::endl;
+    std::cout << "  robotTransform children: " << robotTransform->children.size() << std::endl;
+    std::cout << "  Expected initial physics Z: " << bodyZ << std::endl;
+    std::cout << "  Scene children: " << scene->children.size() << std::endl;
+    
+    // Verify the robot is actually in the scene
+    bool foundRobot = false;
+    for (auto& child : scene->children) {
+        if (child == robotTransform) {
+            foundRobot = true;
+            std::cout << "  ✓ Robot transform found in scene!" << std::endl;
+            break;
+        }
+    }
+    if (!foundRobot) {
+        std::cout << "  ✗ ERROR: Robot transform NOT found in scene!" << std::endl;
+    }
+    
+    // Add several test objects to verify visibility
+    // Test 1: Large bright sphere at origin for visibility test
+    auto test1 = vsg::MatrixTransform::create();
+    test1->matrix = vsg::translate(0.0, 0.0, 2.0); // Above ground
+    geomInfo.position.set(0.0f, 0.0f, 0.0f);
+    geomInfo.dx.set(1.0f, 0.0f, 0.0f);
+    geomInfo.dy.set(0.0f, 1.0f, 0.0f);
+    geomInfo.dz.set(0.0f, 0.0f, 1.0f);
+    geomInfo.color = vsg::vec4(1.0f, 1.0f, 0.0f, 1.0f); // Bright yellow
+    auto sphere1 = builder->createSphere(geomInfo, bodyStateInfo);
+    test1->addChild(sphere1);
+    scene->addChild(test1);
+    
+    std::cout << "Added large yellow test sphere at (0, 0, 2)" << std::endl;
+    
+    // Test 2: Static box at robot height
+    auto test2 = vsg::MatrixTransform::create();
+    test2->matrix = vsg::translate(-2.0, 0.0, bodyZ);
+    geomInfo.position.set(0.0f, 0.0f, 0.0f);
+    geomInfo.dx.set(0.5f, 0.0f, 0.0f);
+    geomInfo.dy.set(0.0f, 0.5f, 0.0f);
+    geomInfo.dz.set(0.0f, 0.0f, 0.5f);
+    geomInfo.color = vsg::vec4(0.0f, 1.0f, 0.0f, 1.0f); // Green
+    auto box2 = builder->createBox(geomInfo, bodyStateInfo);
+    test2->addChild(box2);
+    scene->addChild(test2);
+    
+    std::cout << "Added test objects: Red sphere at (2,0,0.5), Green box at (-2,0," << bodyZ << ")" << std::endl;
+    std::cout << "Robot visual model should be at (0,0," << bodyZ << ")" << std::endl;
+    std::cout << "RobotTransform pointer: " << robotTransform.get() << std::endl;
     
     // Add lighting (using patterns from vsglights example)
     setupModernLighting(scene);
