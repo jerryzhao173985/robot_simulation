@@ -1,6 +1,6 @@
 # VSG-ODE Robot Simulation
 
-An advanced hexapod robot simulation using VulkanSceneGraph (VSG) for graphics and Open Dynamics Engine (ODE) for physics. Now features **cross-platform compatibility** with automatic fallback to OpenGL/GLFW when VSG is not available.
+An advanced hexapod robot simulation using VulkanSceneGraph (VSG) for graphics and Open Dynamics Engine (ODE) for physics. Features realistic hexapod locomotion with stable ground collision handling and **cross-platform compatibility** with automatic fallback to OpenGL/GLFW when VSG is not available.
 
 ## Features
 
@@ -42,8 +42,10 @@ An advanced hexapod robot simulation using VulkanSceneGraph (VSG) for graphics a
 - **Realistic Dynamics**: Full rigid body simulation for all robot parts
 - **Joint Constraints**: Ball joints for hips, hinge joints for knees/ankles
 - **Collision Detection**: Accurate mesh-based terrain collision
+- **Ground Contact**: Stable ground collision with anti-sinking mechanism
 - **Contact Forces**: Configurable friction and restitution
 - **Adaptive Stepping**: Variable time step for stability
+- **High-Frequency Updates**: 240Hz physics rate for precise simulation
 
 ### Terrain System
 - **Procedural Generation**: Multiple terrain types (flat, hills, mountains, rough, stairs)
