@@ -10,15 +10,18 @@ PhysicsWorld::PhysicsWorld() {
     
     // Set default parameters (use Z-up in sync with VSG)
     dWorldSetGravity(world, 0, 0, -9.81f);
-    dWorldSetERP(world, 0.2f);
-    dWorldSetCFM(world, 1e-5);
-    dWorldSetContactMaxCorrectingVel(world, 0.9f);
-    dWorldSetContactSurfaceLayer(world, 0.001f);
+    dWorldSetERP(world, 0.9f);  // Very high error reduction
+    dWorldSetCFM(world, 1e-7);  // Extremely stiff world constraint
+    dWorldSetContactMaxCorrectingVel(world, 10.0f);  // Allow fast error correction
+    dWorldSetContactSurfaceLayer(world, 0.0f);  // No surface layer tolerance
     dWorldSetAutoDisableFlag(world, 0);
-    dWorldSetQuickStepNumIterations(world, 20);
+    dWorldSetQuickStepNumIterations(world, 100);  // Many iterations for stability
+    dWorldSetQuickStepW(world, 1.3);  // Over-relaxation for better convergence
     
-    // Create ground plane at Z=0 (Z-up coordinate system)
-    groundPlane = dCreatePlane(space, 0, 0, 1, 0);
+    // Create ground plane at Z=0
+    // Plane equation: ax + by + cz + d = 0
+    // For Z=0 plane pointing up: 0x + 0y + 1z + 0 = 0
+    groundPlane = dCreatePlane(space, 0, 0, 1, 0); // Ground at exactly Z=0
     
     // Initialize debug group
     debugGroup = vsg::Group::create();
@@ -102,6 +105,19 @@ void PhysicsWorld::handleCollision(dGeomID o1, dGeomID o2) {
         return;
     }
     
+    // Debug: Check if this is a ground collision with detailed info
+    static int frameCount = 0;
+    bool isGroundCollision = (o1 == groundPlane || o2 == groundPlane);
+    if (isGroundCollision && frameCount++ % 60 == 0) {
+        dGeomID obj = (o1 == groundPlane) ? o2 : o1;
+        const dReal* pos = dGeomGetPosition(obj);
+        int geomClass = dGeomGetClass(obj);
+        const char* className = (geomClass == dSphereClass) ? "Sphere" : 
+                               (geomClass == dCapsuleClass) ? "Capsule" : 
+                               (geomClass == dBoxClass) ? "Box" : "Other";
+        std::cout << "[Collision] Ground contact: " << className << " at Z=" << pos[2] << std::endl;
+    }
+    
     // Maximum number of contact points
     const int maxContacts = 32;
     dContact contact[maxContacts];
@@ -110,25 +126,49 @@ void PhysicsWorld::handleCollision(dGeomID o1, dGeomID o2) {
     int numContacts = dCollide(o1, o2, maxContacts, &contact[0].geom, sizeof(dContact));
     
     if (numContacts > 0) {
+        // Log ground contacts for debugging
+        if (isGroundCollision) {
+            std::cout << "[Physics] Creating " << numContacts << " contact joints for ground collision" << std::endl;
+        }
+        
         for (int i = 0; i < numContacts; ++i) {
-            // Set contact parameters
-            contact[i].surface.mode = dContactBounce | dContactSoftCFM | dContactSoftERP | dContactApprox1;
-            
-            // Friction - high for stable standing
-            contact[i].surface.mu = groundFriction * 2.0f;  // Increase friction
-            contact[i].surface.mu2 = groundFriction * 2.0f;
-            
-            // Bounce - reduce to prevent instability
-            contact[i].surface.bounce = groundBounce * 0.1f;  // Less bounce
-            contact[i].surface.bounce_vel = 0.01f;  // Lower bounce threshold
-            
-            // Softness - stiffer contacts for stability
-            contact[i].surface.soft_cfm = contactSoftness * 0.1f;  // Stiffer
-            contact[i].surface.soft_erp = 0.8f;  // Higher error reduction
+            // Set contact parameters - extra stiff for ground contacts
+            if (isGroundCollision) {
+                // EXTREMELY stiff parameters for ground to prevent ANY sinking
+                contact[i].surface.mode = dContactSoftERP | dContactSoftCFM | dContactApprox1;
+                contact[i].surface.soft_cfm = 0.0f;     // Infinitely stiff
+                contact[i].surface.soft_erp = 1.0f;     // Maximum error correction
+                contact[i].surface.mu = dInfinity;      // Infinite friction
+                contact[i].surface.mu2 = dInfinity;     // Infinite friction
+            } else {
+                // Normal parameters for object-object contacts
+                contact[i].surface.mode = dContactBounce | dContactSoftCFM | dContactSoftERP | dContactApprox1 | dContactSlip1 | dContactSlip2;
+                contact[i].surface.slip1 = 0.0f;  // No slip
+                contact[i].surface.slip2 = 0.0f;  // No slip
+                contact[i].surface.mu = groundFriction * 2.0f;  // High friction
+                contact[i].surface.mu2 = groundFriction * 2.0f;
+                contact[i].surface.bounce = 0.01f;  // Very small bounce
+                contact[i].surface.bounce_vel = 0.1f;  // Threshold velocity
+                contact[i].surface.soft_cfm = 0.0f;  // Infinitely stiff (hard contact)
+                contact[i].surface.soft_erp = 0.95f;  // Very high error reduction
+            }
             
             // Create contact joint
             dJointID c = dJointCreateContact(world, contactGroup, &contact[i]);
-            dJointAttach(c, b1, b2);
+            // Attach bodies - handle case where ground has no body (static geometry)
+            // IMPORTANT: For ground contacts, ensure the dynamic body is always first
+            if (o1 == groundPlane) {
+                dJointAttach(c, b2, 0);  // Ground is static, attach dynamic body to world
+            } else if (o2 == groundPlane) {
+                dJointAttach(c, b1, 0);  // Ground is static, attach dynamic body to world
+            } else {
+                dJointAttach(c, b1, b2);  // Both dynamic
+            }
+            
+            if (isGroundCollision && i == 0) {
+                std::cout << "[Physics] Contact at Z=" << contact[i].geom.pos[2] 
+                         << " depth=" << contact[i].geom.depth << std::endl;
+            }
             
             // Store contact information
             ContactPoint cp;

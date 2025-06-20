@@ -67,8 +67,9 @@ public:
 
         // Create physics world
         physicsWorld = std::make_unique<PhysicsWorld>();
-        physicsWorld->setGravity(vsg_vec3(0.0f, 0.0f, -2.0f)); // Reduced gravity for stability
-        physicsWorld->setGroundFriction(2.0f);  // High friction
+        physicsWorld->setGravity(vsg_vec3(0.0f, 0.0f, -9.81f)); // Full gravity - rely on good physics params
+        physicsWorld->setGroundFriction(10.0f);  // Extremely high friction to prevent sliding
+        physicsWorld->setGroundBounce(0.0f);     // No bounce at all
         physicsWorld->enableAdaptiveStepping(true);
 
         // Create terrain
@@ -101,7 +102,7 @@ public:
         
 
         // Setup camera to look at robot initial position
-        float robotInitialZ = 0.95f; // From Robot::createBody()
+        float robotInitialZ = 1.0f; // From Robot::createBody()
         visualizer->setCameraPosition(vsg_vec3(5.0f, 5.0f, robotInitialZ + 2.0f));
         visualizer->setCameraTarget(vsg_vec3(0.0f, 0.0f, robotInitialZ));
         visualizer->enableCameraFollow(false);
@@ -120,7 +121,7 @@ public:
     void run() {
         auto lastTime = std::chrono::high_resolution_clock::now();
         double accumulator = 0.0;
-        const double fixedTimeStep = 1.0 / 60.0; // 60 Hz physics
+        const double fixedTimeStep = 1.0 / 240.0; // 240 Hz physics for better stability
 
         // Navigation goal disabled for visual testing
         // RobotController::NavigationGoal goal;
@@ -154,6 +155,65 @@ public:
 
                 // Update robot
                 robot->update(fixedTimeStep);
+                
+                // Ground clamping - prevent robot from sinking below ground
+                const dReal* bodyPos = dBodyGetPosition(robot->getBody());
+                // Minimum height calculated from leg geometry: body must be ~0.61m above ground for feet to touch
+                const float minBodyHeight = 0.61f;  // Proper height for feet to reach ground
+                
+                // More aggressive clamping - check if robot is sinking and stop it
+                static float lastBodyZ = 1.0f;
+                static int sinkingFrames = 0;
+                
+                if (bodyPos[2] < lastBodyZ - 0.001f) {  // Robot is sinking
+                    sinkingFrames++;
+                    if (sinkingFrames > 5 && bodyPos[2] < 0.7f) {  // Persistent sinking below 0.7m
+                        // Force stop vertical motion
+                        dBodySetPosition(robot->getBody(), bodyPos[0], bodyPos[1], std::max((float)bodyPos[2], minBodyHeight));
+                        dBodySetLinearVel(robot->getBody(), 0, 0, 0);  // Stop all motion
+                        dBodySetAngularVel(robot->getBody(), 0, 0, 0);
+                        
+                        // Also stop all leg segments
+                        auto footGeoms = robot->getFootGeoms();
+                        for (auto footGeom : footGeoms) {
+                            dBodyID footBody = dGeomGetBody(footGeom);
+                            if (footBody) {
+                                const dReal* footVel = dBodyGetLinearVel(footBody);
+                                dBodySetLinearVel(footBody, footVel[0], footVel[1], 0.0f);
+                            }
+                        }
+                    }
+                } else {
+                    sinkingFrames = 0;
+                }
+                lastBodyZ = bodyPos[2];
+                
+                // Hard clamp at minimum height
+                if (bodyPos[2] < minBodyHeight) {
+                    dBodySetPosition(robot->getBody(), bodyPos[0], bodyPos[1], minBodyHeight);
+                    const dReal* vel = dBodyGetLinearVel(robot->getBody());
+                    if (vel[2] < 0) {
+                        dBodySetLinearVel(robot->getBody(), vel[0], vel[1], 0.0f);
+                    }
+                }
+                
+                // Clamp feet to ground - foot boxes should stay above ground
+                auto footGeoms = robot->getFootGeoms();
+                for (auto footGeom : footGeoms) {
+                    dBodyID footBody = dGeomGetBody(footGeom);
+                    if (footBody) {
+                        const dReal* footPos = dBodyGetPosition(footBody);
+                        // Foot boxes are large (8x leg radius = 0.32m), so center should be at least 0.16m above ground
+                        const float minFootHeight = 0.16f;
+                        if (footPos[2] < minFootHeight) {
+                            dBodySetPosition(footBody, footPos[0], footPos[1], minFootHeight);
+                            const dReal* footVel = dBodyGetLinearVel(footBody);
+                            if (footVel[2] < 0) {
+                                dBodySetLinearVel(footBody, footVel[0], footVel[1], 0.0f);
+                            }
+                        }
+                    }
+                }
 
                 accumulator -= fixedTimeStep;
             }
@@ -288,15 +348,29 @@ private:
     }
 
     void displayStats() {
-        std::cout << "\n=== Robot Status ===" << std::endl;
-        vsg_vec3 pos = robot->getPosition();
-        vsg_vec3 vel = robot->getVelocity();
-        std::cout << "Position: (" << pos.x << ", " << pos.y << ", " << pos.z << ")" << std::endl;
-        std::cout << "Velocity: (" << vel.x << ", " << vel.y << ", " << vel.z << ")" << std::endl;
-        std::cout << "Stable: " << (robot->isStable() ? "Yes" : "No") << std::endl;
-        std::cout << "Energy: " << robot->getEnergyConsumption() << " W" << std::endl;
-        std::cout << "Stability: " << controller->getStability() * 100 << "%" << std::endl;
-        std::cout << "Efficiency: " << controller->getEfficiency() * 100 << "%" << std::endl;
+        static int frameCount = 0;
+        frameCount++;
+        
+        // Display every 60 frames (1 second at 60 FPS)
+        if (frameCount % 60 == 0) {
+            std::cout << "\n=== Robot Status ===" << std::endl;
+            vsg_vec3 pos = robot->getPosition();
+            vsg_vec3 vel = robot->getVelocity();
+            std::cout << "Position: (" << pos.x << ", " << pos.y << ", " << pos.z << ")" << std::endl;
+            std::cout << "Velocity: (" << vel.x << ", " << vel.y << ", " << vel.z << ")" << std::endl;
+            std::cout << "Stable: " << (robot->isStable() ? "Yes" : "No") << std::endl;
+            
+            // Check if ground clamping is active
+            if (pos.z < 0.65f) {
+                std::cout << "*** GROUND CLAMPING ACTIVE - Robot at Z=" << pos.z << " ***" << std::endl;
+            }
+            std::cout << "Efficiency: " << controller->getEfficiency() * 100 << "%" << std::endl;
+        }
+        
+        // Always check for very low positions
+        if (robot->getPosition().z < 0.1f) {
+            std::cout << "WARNING: Robot body Z=" << robot->getPosition().z << " (very low!)" << std::endl;
+        }
     }
 
 private:

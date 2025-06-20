@@ -31,6 +31,7 @@ public:
     struct LegSegment {
         dBodyID body;
         dGeomID geom;
+        dGeomID footGeom;  // Optional foot box geometry for tibia segments
         dJointID joint;
 #ifdef USE_OPENGL_FALLBACK
         ref_ptr<MatrixTransform> transform;
@@ -88,7 +89,7 @@ public:
     dGeomID getBodyGeom() const;
     // Get all foot geometry IDs - specifically tibia segments used for ground contact sensing
     // Note: Only tibia segments (index 2) are returned as they represent the feet in hexapod anatomy
-    std::vector<dGeomID> getFootGeoms() const;
+    std::vector<dGeomID> getFootGeoms() const;  // Returns actual foot box geometries
     
     // Visual customization
     void setBodyColor(const vsg_vec4& color);

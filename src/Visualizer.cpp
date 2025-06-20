@@ -961,7 +961,8 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
     const double femurLength = 0.35;
     const double tibiaLength = 0.4;
     const double totalLegLength = coxaLength + femurLength + tibiaLength;
-    const double bodyZ = bodyHeight * 0.5 + totalLegLength * 0.8;  // Match Robot::createBody() line 91
+    // Match physics initial position - body at 1.0 for safe settling
+    const double bodyZ = 1.0;  // Matches Robot::createBody() initZ
     
     // Create robot transform that will be updated with physics position
     robotTransform = vsg::MatrixTransform::create();

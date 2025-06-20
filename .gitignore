@@ -1,24 +1,15 @@
-CMakeLists.txt.user
-CMakeCache.txt
-CMakeFiles
-CMakeScripts
-Testing
-Makefile
-cmake_install.cmake
-install_manifest.txt
-compile_commands.json
-CTestTestfile.cmake
-_deps
-CMakeUserPresets.json
-
-# Prerequisites
-*.d
+# Build directories
+build/
+cmake-build-*/
+out/
+bin/
+lib/
 
 # Compiled Object files
-*.slo
-*.lo
 *.o
 *.obj
+*.lo
+*.slo
 
 # Precompiled Headers
 *.gch
@@ -28,10 +19,6 @@ CMakeUserPresets.json
 *.so
 *.dylib
 *.dll
-
-# Fortran module files
-*.mod
-*.smod
 
 # Compiled Static libraries
 *.lai
@@ -43,5 +30,117 @@ CMakeUserPresets.json
 *.exe
 *.out
 *.app
+vsg_ode_robot
+test_physics
+simple_box_test
+test_box_ground
+test_ground_collision
 
-build/
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+CTestTestfile.cmake
+_deps/
+*.cmake
+!cmake/*.cmake
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.clangd
+.cache/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+*.bak
+*.backup
+
+# Debug and test files
+*_debug.cpp
+src/debug_*.cpp
+src/test_*.cpp
+src/simple_*.cpp
+test_*.sh
+*.patch
+
+# Documentation artifacts (temporary)
+*_ISSUE_*.md
+*_FIX*.md
+*_VERIFICATION.md
+*_ANALYSIS.md
+*_SOLUTION.md
+*_FIXED.md
+GROUND_*.md
+SINKING_*.md
+
+# Node.js (if using any web tools)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+.Python
+
+# Logs
+logs/
+*.log
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Backup files
+*.orig
+*.rej
+
+# Core dumps
+core
+core.*
+vgcore.*
+
+# Valgrind
+callgrind.out.*
+cachegrind.out.*
+
+# GDB
+.gdb_history
+
+# Generated documentation
+docs/_build/
+docs/html/
+doxygen/
+
+# Package files
+*.tar.gz
+*.zip
+*.7z
+*.dmg
+*.iso
+*.jar
+
+# Screenshots (optional - remove this line if you want to keep screenshots)
+*.png
+*.jpg
+*.jpeg
+!docs/images/*
+!assets/*

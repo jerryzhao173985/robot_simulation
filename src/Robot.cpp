@@ -63,6 +63,7 @@ Robot::~Robot() {
             if (segment.joint) {
                 dJointDestroy(segment.joint);
             }
+            // Note: geometries (including footGeom) are destroyed by PhysicsWorld
         }
     }
 }
@@ -72,8 +73,14 @@ void Robot::createBody() {
     dMass mass;
     dMassSetBoxTotal(&mass, 5.0f, config.bodySize.x, config.bodySize.y, config.bodySize.z);
     dBodySetMass(bodyId, &mass);
-    // Add damping so oscillations decay
-    dBodySetDamping(bodyId, 0.1f, 0.1f);
+    // Add stronger damping to prevent oscillations and sinking
+    dBodySetLinearDamping(bodyId, 0.01f);   // Small linear damping
+    dBodySetAngularDamping(bodyId, 0.5f);   // Higher angular damping for stability
+    
+    // Disable auto-disable to keep robot always active
+    dBodySetAutoDisableFlag(bodyId, 0);
+    dBodySetAutoDisableLinearThreshold(bodyId, 0.0);
+    dBodySetAutoDisableAngularThreshold(bodyId, 0.0);
     
     // Set initial position so feet touch the ground at start
     // Calculate total leg reach: coxa + femur + tibia with mathematical validation
@@ -88,10 +95,15 @@ void Robot::createBody() {
 #endif
     }
     
-    // Set initial height based on visual model calculations
-    // Visual model feet are at Z=0.339559 with body at 0.95
-    float initZ = 0.95f; // Match visual model exactly
+    // Set initial height to place feet just above ground level
+    // Physics feet are at Z=0.339559 when body is at 0.95
+    // So to put feet at ground (Z=0), body should be at 0.95 - 0.339559 = 0.610441
+    // Start much higher to ensure clean settling without penetration
+    float initZ = 1.0f; // This places feet well above ground for safe settling
     dBodySetPosition(bodyId, 0.0f, 0.0f, initZ);
+    
+    // No initial velocity - let robot settle naturally
+    dBodySetLinearVel(bodyId, 0.0f, 0.0f, 0.0f);
     
 #ifdef DEBUG_ROBOT_INIT
     std::cout << "[Robot] Initial body Z position = " << initZ << " (total leg reach: " << totalLegLength << ")" << std::endl;
@@ -129,7 +141,7 @@ void Robot::createLegs() {
         const double maxAngle = M_PI / 2.0; // 90 degrees
         const double coxaAngle = side * (70.0 * M_PI / 180.0);  // 70° outward - match visual
         const double femurDownAngle = 20.0 * M_PI / 180.0;      // 20° downward - match visual
-        const double tibiaDownAngle = 45.0 * M_PI / 180.0;      // 45° further downward
+        const double tibiaDownAngle = 65.0 * M_PI / 180.0;      // 65° total angle to match visual
         
         // Bounds checking for angle calculations
         if (std::abs(coxaAngle) > maxAngle || femurDownAngle > maxAngle || tibiaDownAngle > maxAngle) {
@@ -145,6 +157,9 @@ void Robot::createLegs() {
         dMass coxaMass;
         dMassSetCapsuleTotal(&coxaMass, 0.2f, 3, config.legRadius, config.coxaLength);
         dBodySetMass(coxaBody, &coxaMass);
+        dBodySetLinearDamping(coxaBody, 0.001f);    // Very light linear damping
+        dBodySetAngularDamping(coxaBody, 0.1f);     // Light angular damping
+        dBodySetAutoDisableFlag(coxaBody, 0);       // Keep leg segments always active
         
         // Position coxa extending outward from body with slight upward angle
         double coxaUpAngle = 5.0 * M_PI / 180.0; // 5° upward to match visual
@@ -169,6 +184,7 @@ void Robot::createLegs() {
         // Create coxa geometry
         dGeomID coxaGeom = dCreateCapsule(space, config.legRadius, config.coxaLength);
         dGeomSetBody(coxaGeom, coxaBody);
+        // No offset rotation - body orientation handles segment alignment
         
         // Hip joint (ball joint connecting coxa to body)
         dJointID hipJoint = dJointCreateBall(world, 0);
@@ -176,7 +192,7 @@ void Robot::createLegs() {
         dJointSetBallAnchor(hipJoint, attachX, attachY, attachZ);
         
         // Store coxa segment
-        LegSegment coxaSegment = {coxaBody, coxaGeom, hipJoint, nullptr, config.coxaLength, config.legRadius};
+        LegSegment coxaSegment = {coxaBody, coxaGeom, nullptr, hipJoint, nullptr, config.coxaLength, config.legRadius};
         legs[i].segments.push_back(coxaSegment);
         
         // =============================================
@@ -186,6 +202,9 @@ void Robot::createLegs() {
         dMass femurMass;
         dMassSetCapsuleTotal(&femurMass, 0.15f, 3, config.legRadius, config.femurLength);
         dBodySetMass(femurBody, &femurMass);
+        dBodySetLinearDamping(femurBody, 0.001f);   // Very light linear damping
+        dBodySetAngularDamping(femurBody, 0.1f);    // Light angular damping
+        dBodySetAutoDisableFlag(femurBody, 0);      // Keep leg segments always active
         
         // Position femur angled downward from coxa end with validated mathematics
         double coxaEndWorldX = attachX + cos(coxaAngle) * cos(coxaUpAngle) * config.coxaLength;
@@ -210,18 +229,27 @@ void Robot::createLegs() {
         dQFromAxisAndAngle(femurQ, 0, 0, 1, coxaAngle);
         dBodySetQuaternion(femurBody, femurQ);
         
-        // Create femur geometry
+        // Create femur geometry with proper orientation
         dGeomID femurGeom = dCreateCapsule(space, config.legRadius, config.femurLength);
         dGeomSetBody(femurGeom, femurBody);
+        // Rotate capsule to align along segment
+        dMatrix3 femurR;
+        double femurAngle = atan2(femurMidZ - coxaEndWorldZ, 
+                                 sqrt(pow(femurMidX - coxaEndWorldX, 2) + pow(femurMidY - coxaEndWorldY, 2)));
+        dRFromAxisAndAngle(femurR, 0, 1, 0, M_PI/2 - femurAngle);
+        dGeomSetOffsetRotation(femurGeom, femurR);
         
         // Knee joint (hinge joint connecting femur to coxa)
         dJointID kneeJoint = dJointCreateHinge(world, 0);
         dJointAttach(kneeJoint, coxaBody, femurBody);
         dJointSetHingeAnchor(kneeJoint, coxaEndWorldX, coxaEndWorldY, coxaEndWorldZ);
         dJointSetHingeAxis(kneeJoint, 1, 0, 0);  // Rotate around X-axis
+        // Set wider joint limits for natural movement
+        dJointSetHingeParam(kneeJoint, dParamLoStop, -M_PI/3);  // -60 degrees
+        dJointSetHingeParam(kneeJoint, dParamHiStop, M_PI/3);   // +60 degrees
         
         // Store femur segment
-        LegSegment femurSegment = {femurBody, femurGeom, kneeJoint, nullptr, config.femurLength, config.legRadius};
+        LegSegment femurSegment = {femurBody, femurGeom, nullptr, kneeJoint, nullptr, config.femurLength, config.legRadius};
         legs[i].segments.push_back(femurSegment);
         
         // =============================================
@@ -231,24 +259,31 @@ void Robot::createLegs() {
         dMass tibiaMass;
         dMassSetCapsuleTotal(&tibiaMass, 0.1f, 3, config.legRadius, config.tibiaLength);
         dBodySetMass(tibiaBody, &tibiaMass);
+        dBodySetLinearDamping(tibiaBody, 0.001f);   // Very light linear damping
+        dBodySetAngularDamping(tibiaBody, 0.1f);    // Light angular damping
+        dBodySetAutoDisableFlag(tibiaBody, 0);      // Keep leg segments always active
         
         // Position tibia angled further downward to reach ground with validation
         double femurEndX = coxaEndWorldX + cos(coxaAngle) * cos(femurDownAngle) * config.femurLength;
         double femurEndY = coxaEndWorldY + sin(coxaAngle) * cos(femurDownAngle) * config.femurLength;
         double femurEndZ = coxaEndWorldZ - sin(femurDownAngle) * config.femurLength;
-        // Tibia total angle from horizontal is 65° to match visual
-        double tibiaTotalAngle = 65.0 * M_PI / 180.0;
+        // Tibia uses same angle as visual model
+        double tibiaTotalAngle = tibiaDownAngle;
         double tibiaMidX = femurEndX + cos(coxaAngle) * cos(tibiaTotalAngle) * config.tibiaLength * 0.5;
         double tibiaMidY = femurEndY + sin(coxaAngle) * cos(tibiaTotalAngle) * config.tibiaLength * 0.5;
         double tibiaMidZ = femurEndZ - sin(tibiaTotalAngle) * config.tibiaLength * 0.5;
         
         // Calculate foot end position for ground contact validation
-        double footEndZ = tibiaMidZ - sin(tibiaTotalAngle) * config.tibiaLength * 0.5;
-        if (footEndZ > 0.1f) {
+        double footEndX = femurEndX + cos(coxaAngle) * cos(tibiaTotalAngle) * config.tibiaLength;
+        double footEndY = femurEndY + sin(coxaAngle) * cos(tibiaTotalAngle) * config.tibiaLength;
+        double footEndZ = femurEndZ - sin(tibiaTotalAngle) * config.tibiaLength;
+        
 #ifdef DEBUG_ROBOT_INIT
+        std::cout << "  Leg " << i << " foot position: (" << footEndX << ", " << footEndY << ", " << footEndZ << ")" << std::endl;
+        if (footEndZ > 0.1f) {
             std::cout << "⚠️  Warning: Leg " << i << " foot end (" << footEndZ << ") may not reach ground" << std::endl;
-#endif
         }
+#endif
         
         dBodySetPosition(tibiaBody, tibiaMidX, tibiaMidY, tibiaMidZ);
         
@@ -257,18 +292,34 @@ void Robot::createLegs() {
         dQFromAxisAndAngle(tibiaQ, 0, 0, 1, coxaAngle);
         dBodySetQuaternion(tibiaBody, tibiaQ);
         
-        // Create tibia geometry
+        // Create tibia geometry with proper orientation
         dGeomID tibiaGeom = dCreateCapsule(space, config.legRadius, config.tibiaLength);
         dGeomSetBody(tibiaGeom, tibiaBody);
+        // Rotate capsule to align along segment
+        dMatrix3 tibiaR;
+        double tibiaAngle = atan2(tibiaMidZ - femurEndZ,
+                                 sqrt(pow(tibiaMidX - femurEndX, 2) + pow(tibiaMidY - femurEndY, 2)));
+        dRFromAxisAndAngle(tibiaR, 0, 1, 0, M_PI/2 - tibiaAngle);
+        dGeomSetOffsetRotation(tibiaGeom, tibiaR);
+        
+        // Add foot box for absolutely reliable ground contact
+        float footSize = config.legRadius * 8.0f;  // Increased from 6x to 8x for better stability
+        dGeomID footGeom = dCreateBox(space, footSize, footSize, footSize);
+        dGeomSetBody(footGeom, tibiaBody);
+        // Position at foot end
+        dGeomSetOffsetPosition(footGeom, 0, 0, -config.tibiaLength * 0.5f);
         
         // Ankle joint (hinge joint connecting tibia to femur)
         dJointID ankleJoint = dJointCreateHinge(world, 0);
         dJointAttach(ankleJoint, femurBody, tibiaBody);
         dJointSetHingeAnchor(ankleJoint, femurEndX, femurEndY, femurEndZ);
         dJointSetHingeAxis(ankleJoint, 1, 0, 0);  // Rotate around X-axis
+        // Set wider joint limits for natural movement
+        dJointSetHingeParam(ankleJoint, dParamLoStop, -M_PI/3);  // -60 degrees
+        dJointSetHingeParam(ankleJoint, dParamHiStop, M_PI/3);   // +60 degrees
         
-        // Store tibia segment
-        LegSegment tibiaSegment = {tibiaBody, tibiaGeom, ankleJoint, nullptr, config.tibiaLength, config.legRadius};
+        // Store tibia segment with foot geometry
+        LegSegment tibiaSegment = {tibiaBody, tibiaGeom, footGeom, ankleJoint, nullptr, config.tibiaLength, config.legRadius};
         legs[i].segments.push_back(tibiaSegment);
         
         // Store leg data for compatibility (attachment point calculated dynamically)
@@ -466,10 +517,13 @@ std::vector<dGeomID> Robot::getFootGeoms() const {
     std::vector<dGeomID> geoms;
     geoms.reserve(NUM_LEGS);
     
-    // Return tibia (last segment) geoms as feet for contact detection
+    // Return actual foot box geometries from tibia segments
     for (int i = 0; i < NUM_LEGS; ++i) {
         if (legs[i].segments.size() >= 3) {  // Ensure we have coxa, femur, tibia
-            geoms.push_back(legs[i].segments[static_cast<int>(LegSegmentIndex::TIBIA)].geom);  // Use enum for clarity
+            dGeomID footGeom = legs[i].segments[static_cast<int>(LegSegmentIndex::TIBIA)].footGeom;
+            if (footGeom) {
+                geoms.push_back(footGeom);  // Return the actual foot box geometry
+            }
         }
     }
     return geoms;
