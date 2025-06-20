@@ -5,12 +5,18 @@
 #include <csignal>
 #include <atomic>
 #include <unistd.h>
+#include <sstream>
+#include <iomanip>
 
 #include "Robot.h"
 #include "PhysicsWorld.h"
 #include "RobotController.h"
 #include "Terrain.h"
 #include "Visualizer.h"
+#include "InputHandler.h"
+#include "DebugOutput.h"
+#include "TestEventHandler.h"
+#include "ComprehensiveEventDebugger.h"
 
 #ifndef USE_OPENGL_FALLBACK
 #include <vsg/all.h>
@@ -93,9 +99,35 @@ public:
 
         // Create robot controller
         controller = std::make_unique<RobotController>(robot.get(), physicsWorld.get());
-        controller->setControlMode(RobotController::MANUAL);  // Manual control for stability
+        controller->setControlMode(RobotController::AUTONOMOUS);  // Start in autonomous mode
         controller->enableObstacleAvoidance(true);
         controller->enableDynamicStability(true);
+        
+        // Create input handler
+#ifndef USE_OPENGL_FALLBACK
+        // Add comprehensive event debugger
+        auto eventDebugger = ComprehensiveEventDebugger::create();
+        visualizer->addEventHandler(eventDebugger);
+        std::cout << "Added ComprehensiveEventDebugger to visualizer" << std::endl;
+        
+        // Add test handler to verify events
+        auto testHandler = TestEventHandler::create();
+        visualizer->addEventHandler(testHandler);
+        std::cout << "Added TestEventHandler to visualizer" << std::endl;
+        
+        auto vsgInputHandler = InputHandler::create(controller.get(), visualizer.get());
+        visualizer->addEventHandler(vsgInputHandler);
+        std::cout << "Added InputHandler to visualizer" << std::endl;
+        
+        // Store raw pointer for access (VSG manages lifetime)
+        inputHandlerPtr = vsgInputHandler.get();
+        
+        // Store debugger for summary
+        eventDebuggerPtr = eventDebugger.get();
+#else
+        inputHandler = std::make_unique<InputHandler>(controller.get(), visualizer.get());
+        inputHandlerPtr = inputHandler.get();
+#endif
 
         // Add some obstacles
         addObstacles();
@@ -127,7 +159,7 @@ public:
     void run() {
         auto lastTime = std::chrono::high_resolution_clock::now();
         double accumulator = 0.0;
-        const double fixedTimeStep = 1.0 / 240.0; // 240 Hz physics for better stability
+        const double fixedTimeStep = 1.0 / 60.0; // 60 Hz physics for better performance
 
         // Navigation goal disabled for visual testing
         // RobotController::NavigationGoal goal;
@@ -137,12 +169,26 @@ public:
         // controller->setNavigationGoal(goal);
 
         std::cout << "Starting main render loop..." << std::endl;
+        std::cout << "\n=== CONTROLS ===" << std::endl;
+        std::cout << "Space    - Toggle manual/autonomous control" << std::endl;
+        std::cout << "WASD     - Move robot (manual mode only)" << std::endl;
+        std::cout << "C        - Cycle camera modes" << std::endl;
+        std::cout << "V        - Cycle debug verbosity" << std::endl;
+        std::cout << "ESC      - Exit simulation" << std::endl;
+        std::cout << "================\n" << std::endl;
+        
+        std::cout << "INITIAL STATE: " << (controller->getControlMode() == RobotController::AUTONOMOUS ? "AUTONOMOUS" : "MANUAL") << " mode" << std::endl;
         
         // Give window a moment to initialize
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         
         int frame = 0;
-        while (!visualizer->shouldClose() && !g_shouldExit && frame < 300) { // Run for ~5 seconds at 60fps
+        std::cout << "Entering render loop..." << std::endl;
+        while (!visualizer->shouldClose() && !g_shouldExit) { // Run until user closes
+            if (frame < 5) {
+                std::cout << "Frame " << frame << ": shouldClose=" << visualizer->shouldClose() 
+                          << " g_shouldExit=" << g_shouldExit << std::endl;
+            }
             auto currentTime = std::chrono::high_resolution_clock::now();
             double deltaTime = std::chrono::duration<double>(currentTime - lastTime).count();
             lastTime = currentTime;
@@ -161,74 +207,39 @@ public:
 
                 // Update robot
                 robot->update(fixedTimeStep);
-                
-                // Ground clamping - prevent robot from sinking below ground
-                const dReal* bodyPos = dBodyGetPosition(robot->getBody());
-                // Minimum height calculated from leg geometry: body must be ~0.61m above ground for feet to touch
-                const float minBodyHeight = 0.61f;  // Proper height for feet to reach ground
-                
-                // More aggressive clamping - check if robot is sinking and stop it
-                static float lastBodyZ = 1.0f;
-                static int sinkingFrames = 0;
-                
-                if (bodyPos[2] < lastBodyZ - 0.001f) {  // Robot is sinking
-                    sinkingFrames++;
-                    if (sinkingFrames > 5 && bodyPos[2] < 0.7f) {  // Persistent sinking below 0.7m
-                        // Force stop vertical motion
-                        dBodySetPosition(robot->getBody(), bodyPos[0], bodyPos[1], std::max((float)bodyPos[2], minBodyHeight));
-                        dBodySetLinearVel(robot->getBody(), 0, 0, 0);  // Stop all motion
-                        dBodySetAngularVel(robot->getBody(), 0, 0, 0);
-                        
-                        // Also stop all leg segments
-                        auto footGeoms = robot->getFootGeoms();
-                        for (auto footGeom : footGeoms) {
-                            dBodyID footBody = dGeomGetBody(footGeom);
-                            if (footBody) {
-                                const dReal* footVel = dBodyGetLinearVel(footBody);
-                                dBodySetLinearVel(footBody, footVel[0], footVel[1], 0.0f);
-                            }
-                        }
-                    }
-                } else {
-                    sinkingFrames = 0;
-                }
-                lastBodyZ = bodyPos[2];
-                
-                // Hard clamp at minimum height
-                if (bodyPos[2] < minBodyHeight) {
-                    dBodySetPosition(robot->getBody(), bodyPos[0], bodyPos[1], minBodyHeight);
-                    const dReal* vel = dBodyGetLinearVel(robot->getBody());
-                    if (vel[2] < 0) {
-                        dBodySetLinearVel(robot->getBody(), vel[0], vel[1], 0.0f);
-                    }
-                }
-                
-                // Clamp feet to ground - foot boxes should stay above ground
-                auto footGeoms = robot->getFootGeoms();
-                for (auto footGeom : footGeoms) {
-                    dBodyID footBody = dGeomGetBody(footGeom);
-                    if (footBody) {
-                        const dReal* footPos = dBodyGetPosition(footBody);
-                        // Foot boxes are large (8x leg radius = 0.32m), so center should be at least 0.16m above ground
-                        const float minFootHeight = 0.16f;
-                        if (footPos[2] < minFootHeight) {
-                            dBodySetPosition(footBody, footPos[0], footPos[1], minFootHeight);
-                            const dReal* footVel = dBodyGetLinearVel(footBody);
-                            if (footVel[2] < 0) {
-                                dBodySetLinearVel(footBody, footVel[0], footVel[1], 0.0f);
-                            }
-                        }
-                    }
-                }
 
                 accumulator -= fixedTimeStep;
+            }
+            
+            // Ground clamping - do this once per frame, not per physics step
+            const dReal* bodyPos = dBodyGetPosition(robot->getBody());
+            const float minBodyHeight = 0.61f;  // Proper height for feet to reach ground
+            
+            // Simple height clamping
+            if (bodyPos[2] < minBodyHeight) {
+                dBodySetPosition(robot->getBody(), bodyPos[0], bodyPos[1], minBodyHeight);
+                const dReal* vel = dBodyGetLinearVel(robot->getBody());
+                if (vel[2] < 0) {
+                    dBodySetLinearVel(robot->getBody(), vel[0], vel[1], 0.0f);
+                }
             }
 
             robot->updateLegPositions();
 
-            // Update camera to follow robot
+            // Update camera to follow robot only if stable
             vsg_vec3 robotPos = robot->getPosition();
-            visualizer->enableCameraFollow(true, robotPos);
+            
+            // Don't follow robot if it's flipped or too low/high
+            if (robot->isStable() && robotPos.z > 0.2f && robotPos.z < 3.0f) {
+                visualizer->enableCameraFollow(true, robotPos);
+            } else {
+                // Switch to free camera if robot is unstable
+                visualizer->enableCameraFollow(false);
+                if (visualizer->getCameraMode() == Visualizer::CameraMode::FOLLOW) {
+                    visualizer->setCameraMode(Visualizer::CameraMode::FREE);
+                    DEBUG_WARNING("Robot unstable - switching to free camera");
+                }
+            }
             
             // Update robot visual model to match physics body
             vsg_quat robotOrient = robot->getOrientation();
@@ -251,6 +262,16 @@ public:
             }
             frameCount++;
             frame++;
+            
+            // Debug: print every 300 frames (5 seconds at 60 FPS)
+            if (frame % 300 == 0) {
+                std::cout << "[MAIN] Still running... Frame: " << frame << std::endl;
+                
+                // Print event summary if debugger is available
+                if (eventDebuggerPtr) {
+                    eventDebuggerPtr->printSummary();
+                }
+            }
         }
         
         std::cout << "Rendered " << frame << " frames before exit" << std::endl;
@@ -324,50 +345,36 @@ private:
     }
 
     void handleInput() {
-        // Check if manual control is enabled
-        if (visualizer->isManualControlEnabled()) {
-            // Get manual control velocity from visualizer
-            vsg_vec3 vel = visualizer->getManualControlVelocity();
-            
-            // Apply manual control to robot through controller
-            controller->setControlMode(RobotController::MANUAL);
-            
-            // Convert to control commands for the robot
-            if (vel.x != 0 || vel.y != 0 || vel.z != 0) {
-                // Apply velocities to robot body
-                const dReal* currentVel = dBodyGetLinearVel(robot->getBody());
-                dBodySetLinearVel(robot->getBody(), 
-                    vel.x,  // Forward/backward
-                    vel.y,  // Left/right
-                    currentVel[2] + vel.z * 0.1f  // Up/down (dampened)
-                );
-            }
+        // Input is now handled by the InputHandler class
+        // Update movement if manual control is active
+        if (inputHandlerPtr && inputHandlerPtr->isManualControlActive()) {
+            inputHandlerPtr->updateMovement();
         } else {
-            // Automated mode switching
-            static int modeCounter = 0;
-            modeCounter++;
-            
-            if (modeCounter % 600 == 0) {  // Every 10 seconds at 60 FPS
-                static int currentMode = 0;
-                currentMode = (currentMode + 1) % 3;
-                
-                switch (currentMode) {
-                    case 0:
-                        controller->setControlMode(RobotController::AUTONOMOUS);
-                        std::cout << "Switched to AUTONOMOUS mode" << std::endl;
-                        break;
-                    case 1:
-                        controller->setControlMode(RobotController::LEARNING);
-                        controller->startLearning();
-                        std::cout << "Switched to LEARNING mode" << std::endl;
-                        break;
-                    case 2:
-                        controller->setControlMode(RobotController::DEMONSTRATION);
-                        controller->recordPattern("demo_pattern");
-                        std::cout << "Switched to DEMONSTRATION mode" << std::endl;
-                        break;
-                }
-            }
+            // Automated mode switching DISABLED for debugging
+            // static int modeCounter = 0;
+            // modeCounter++;
+            // 
+            // if (modeCounter % 600 == 0) {  // Every 10 seconds at 60 FPS
+            //     static int currentMode = 0;
+            //     currentMode = (currentMode + 1) % 3;
+            //     
+            //     switch (currentMode) {
+            //         case 0:
+            //             controller->setControlMode(RobotController::AUTONOMOUS);
+            //             std::cout << "Switched to AUTONOMOUS mode" << std::endl;
+            //             break;
+            //         case 1:
+            //             controller->setControlMode(RobotController::LEARNING);
+            //             controller->startLearning();
+            //             std::cout << "Switched to LEARNING mode" << std::endl;
+            //             break;
+            //         case 2:
+            //             controller->setControlMode(RobotController::DEMONSTRATION);
+            //             controller->recordPattern("demo_pattern");
+            //             std::cout << "Switched to DEMONSTRATION mode" << std::endl;
+            //             break;
+            //     }
+            // }
         }
     }
 
@@ -400,26 +407,82 @@ private:
             default: robotStats << "Unknown"; break;
         }
         
-        // Send stats to visualizer (it will append its own FPS info)
-        visualizer->updateTextOverlay(robotStats.str(), "");
+        // Update visualizer text with new system
+        static auto lastTime = std::chrono::high_resolution_clock::now();
+        auto currentTime = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration<double>(currentTime - lastTime).count();
         
-        // Display every 60 frames (1 second at 60 FPS)
-        if (frameCount % 60 == 0) {
-            std::cout << "\n=== Robot Status ===" << std::endl;
-            std::cout << "Position: (" << pos.x << ", " << pos.y << ", " << pos.z << ")" << std::endl;
-            std::cout << "Velocity: (" << vel.x << ", " << vel.y << ", " << vel.z << ")" << std::endl;
-            std::cout << "Stable: " << (stable ? "Yes" : "No") << std::endl;
-            
-            // Check if ground clamping is active
-            if (pos.z < 0.65f) {
-                std::cout << "*** GROUND CLAMPING ACTIVE - Robot at Z=" << pos.z << " ***" << std::endl;
-            }
-            std::cout << "Efficiency: " << efficiency * 100 << "%" << std::endl;
+        // Calculate FPS
+        static double fps = 60.0;
+        static int fpsFrameCount = 0;
+        fpsFrameCount++;
+        if (duration >= 1.0) {
+            fps = fpsFrameCount / duration;
+            fpsFrameCount = 0;
+            lastTime = currentTime;
         }
         
-        // Always check for very low positions
+        // Get control mode string
+        std::string controlMode;
+        switch (controller->getControlMode()) {
+            case RobotController::MANUAL: 
+                controlMode = inputHandlerPtr && inputHandlerPtr->isManualControlActive() ? "MANUAL (Active)" : "MANUAL (Inactive)"; 
+                break;
+            case RobotController::AUTONOMOUS: controlMode = "AUTONOMOUS"; break;
+            case RobotController::LEARNING: controlMode = "LEARNING"; break;
+            case RobotController::DEMONSTRATION: controlMode = "DEMONSTRATION"; break;
+            default: controlMode = "UNKNOWN"; break;
+        }
+        
+        // Update visualizer text overlay
+        visualizer->updateStatsText(
+            fps, 
+            1000.0 / fps,  // Frame time in ms
+            pos, 
+            vel, 
+            stable, 
+            controlMode
+        );
+        
+        // Update controls visibility
+        if (inputHandlerPtr) {
+            visualizer->updateControlsText(inputHandlerPtr->shouldShowHelp());
+            visualizer->setTextVisible(inputHandlerPtr->shouldShowStats(), inputHandlerPtr->shouldShowHelp());
+        }
+        
+        // Display status update every 1 second (60 frames at 60 FPS)
+        static int statusCounter = 0;
+        if (++statusCounter % 60 == 0) {
+            // Clear line and show compact status with color coding
+            std::cout << "\r\033[K"; // Clear line
+            
+            // Color code the control mode
+            if (controller->getControlMode() == RobotController::MANUAL && inputHandlerPtr && inputHandlerPtr->isManualControlActive()) {
+                std::cout << "\033[1;32m[MANUAL ACTIVE]\033[0m "; // Bright green
+            } else if (controller->getControlMode() == RobotController::MANUAL) {
+                std::cout << "\033[1;33m[MANUAL INACTIVE]\033[0m "; // Yellow  
+            } else {
+                std::cout << "\033[1;36m[AUTONOMOUS]\033[0m "; // Cyan
+            }
+            
+            std::cout << "Pos(" << std::fixed << std::setprecision(1) 
+                      << pos.x << "," << pos.y << "," << pos.z << ") "
+                      << "| Speed: " << std::setprecision(1) << vsg::length(vel) << "m/s ";
+            
+            // Show manual control values if active
+            if (inputHandlerPtr && inputHandlerPtr->isManualControlActive()) {
+                vsg::vec3 mv = inputHandlerPtr->getMovementVector();
+                std::cout << "| Cmd(" << std::setprecision(1) << mv.x << "," << mv.y << ") ";
+            }
+            
+            std::cout << "| FPS: " << std::setprecision(0) << fps
+                      << "| Stable: " << (stable ? "\033[32mYES\033[0m" : "\033[31mNO\033[0m")
+                      << std::flush;
+        }
+        
+        // Only warn about critical issues
         if (pos.z < 0.1f) {
-            std::cout << "WARNING: Robot body Z=" << pos.z << " (very low!)" << std::endl;
+            DEBUG_WARNING("Robot body very low at Z=" + std::to_string(pos.z));
         }
     }
 
@@ -429,6 +492,12 @@ private:
     std::unique_ptr<Robot> robot;
     std::unique_ptr<RobotController> controller;
     std::unique_ptr<Terrain> terrain;
+    
+#ifdef USE_OPENGL_FALLBACK
+    std::unique_ptr<InputHandler> inputHandler;
+#endif
+    InputHandler* inputHandlerPtr = nullptr;
+    ComprehensiveEventDebugger* eventDebuggerPtr = nullptr;
     
 #ifdef USE_OPENGL_FALLBACK
     ref_ptr<Group> sceneRoot;
@@ -446,18 +515,13 @@ int main(int argc, char** argv) {
         std::signal(SIGTERM, signalHandler);
         
         std::cout << "Robot simulation started!" << std::endl;
-        std::cout << "\n=== CONTROLS ===" << std::endl;
-        std::cout << "WASD     - Move robot (when manual control is on)" << std::endl;
-        std::cout << "Q/E      - Move up/down" << std::endl;
-        std::cout << "Space    - Toggle manual control" << std::endl;
+        std::cout << "\n=== SIMPLIFIED CONTROLS ===" << std::endl;
+        std::cout << "Space    - Toggle manual/autonomous control" << std::endl;
+        std::cout << "WASD     - Move robot (manual mode only)" << std::endl;
         std::cout << "C        - Cycle camera modes" << std::endl;
-        std::cout << "H        - Toggle help overlay" << std::endl;
-        std::cout << "F1       - Toggle stats display" << std::endl;
-        std::cout << "F2       - Toggle shadows" << std::endl;
-        std::cout << "F3       - Toggle SSAO" << std::endl;
-        std::cout << "Mouse    - Free camera control (drag to rotate)" << std::endl;
-        std::cout << "Ctrl+C   - Graceful shutdown" << std::endl;
-        std::cout << "================\n" << std::endl;
+        std::cout << "V        - Cycle debug verbosity" << std::endl;
+        std::cout << "ESC      - Exit simulation" << std::endl;
+        std::cout << "===========================\n" << std::endl;
         
 #ifdef USE_OPENGL_FALLBACK
         std::cout << "Running with OpenGL/GLFW fallback renderer." << std::endl;

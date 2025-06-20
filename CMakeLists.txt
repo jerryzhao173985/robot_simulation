@@ -142,7 +142,8 @@ endif()
 
 add_executable(vsg_ode_robot
     src/main.cpp src/Robot.cpp src/PhysicsWorld.cpp
-    src/RobotController.cpp src/Terrain.cpp src/Visualizer.cpp)
+    src/RobotController.cpp src/Terrain.cpp src/Visualizer.cpp
+    src/InputHandler.cpp src/DebugOutput.cpp)
 
 # Add physics test executable (commented out - file doesn't exist)
 # add_executable(test_physics

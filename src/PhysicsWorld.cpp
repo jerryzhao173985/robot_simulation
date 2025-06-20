@@ -1,5 +1,7 @@
 #include "PhysicsWorld.h"
+#include "DebugOutput.h"
 #include <iostream>
+#include <sstream>
 #include <algorithm>
 
 PhysicsWorld::PhysicsWorld() {
@@ -115,7 +117,9 @@ void PhysicsWorld::handleCollision(dGeomID o1, dGeomID o2) {
         const char* className = (geomClass == dSphereClass) ? "Sphere" : 
                                (geomClass == dCapsuleClass) ? "Capsule" : 
                                (geomClass == dBoxClass) ? "Box" : "Other";
-        std::cout << "[Collision] Ground contact: " << className << " at Z=" << pos[2] << std::endl;
+        std::stringstream ss;
+        ss << "Ground contact: " << className << " at Z=" << pos[2];
+        DEBUG_PHYSICS(ss.str());
     }
     
     // Maximum number of contact points
@@ -128,7 +132,9 @@ void PhysicsWorld::handleCollision(dGeomID o1, dGeomID o2) {
     if (numContacts > 0) {
         // Log ground contacts for debugging
         if (isGroundCollision) {
-            std::cout << "[Physics] Creating " << numContacts << " contact joints for ground collision" << std::endl;
+            std::stringstream ss;
+            ss << "Creating " << numContacts << " contact joints for ground collision";
+            DEBUG_PHYSICS(ss.str());
         }
         
         for (int i = 0; i < numContacts; ++i) {
@@ -166,8 +172,10 @@ void PhysicsWorld::handleCollision(dGeomID o1, dGeomID o2) {
             }
             
             if (isGroundCollision && i == 0) {
-                std::cout << "[Physics] Contact at Z=" << contact[i].geom.pos[2] 
-                         << " depth=" << contact[i].geom.depth << std::endl;
+                std::stringstream ss;
+                ss << "Contact at Z=" << contact[i].geom.pos[2] 
+                   << " depth=" << contact[i].geom.depth;
+                DEBUG_PHYSICS(ss.str());
             }
             
             // Store contact information

@@ -70,6 +70,10 @@ public:
     ControlMode getControlMode() const { return controlMode; }
     void setControlInput(const ControlInput& input) { currentInput = input; }
     
+    // Manual control
+    void setManualVelocity(const vsg_vec3& velocity) { manualVelocity = velocity; }
+    void setManualRotation(float rotation) { manualRotation = rotation; }
+    
     // Navigation
     void setNavigationGoal(const NavigationGoal& goal);
     void clearNavigationPath();
@@ -147,6 +151,10 @@ private:
     
     // Feature flags
     bool obstacleAvoidanceEnabled = true;
+    
+    // Manual control
+    vsg_vec3 manualVelocity{0.0f, 0.0f, 0.0f};
+    float manualRotation = 0.0f;
     bool pathSmoothingEnabled = true;
     bool dynamicStabilityEnabled = true;
     

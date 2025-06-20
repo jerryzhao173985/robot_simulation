@@ -1,10 +1,12 @@
 #include "Robot.h"
+#include "DebugOutput.h"
 #include <array>
 #include <iostream>
+#include <sstream>
 #include <cmath>
 
-// Debug control - comment out for production builds
-#define DEBUG_ROBOT_INIT
+// Debug control - now controlled by DebugOutput.h
+// #define DEBUG_ROBOT_INIT
 
 Robot::Robot(dWorldID world, dSpaceID space, 
 #ifdef USE_OPENGL_FALLBACK
@@ -43,8 +45,10 @@ Robot::Robot(dWorldID world, dSpaceID space,
     // Verify leg attachment positions match Visualizer
     for (int i = 0; i < NUM_LEGS; ++i) {
         vsg_vec3 pos = getLegPosition(i);
-        std::cout << "Leg " << i << " attachment (X, Y, Z): ("
-                  << pos.x << ", " << pos.y << ", " << pos.z << ")" << std::endl;
+        std::stringstream ss;
+        ss << "Leg " << i << " attachment (X, Y, Z): ("
+           << pos.x << ", " << pos.y << ", " << pos.z << ")";
+        DEBUG_VERBOSE(ss.str());
     }
     std::cout << "✅ Physics legs now match Visualizer anatomy!" << std::endl;
 #endif
@@ -71,7 +75,7 @@ Robot::~Robot() {
 void Robot::createBody() {
     // Create main body mass
     dMass mass;
-    dMassSetBoxTotal(&mass, 5.0f, config.bodySize.x, config.bodySize.y, config.bodySize.z);
+    dMassSetBoxTotal(&mass, 10.0f, config.bodySize.x, config.bodySize.y, config.bodySize.z); // Increased mass for stability
     dBodySetMass(bodyId, &mass);
     // Add stronger damping to prevent oscillations and sinking
     dBodySetLinearDamping(bodyId, 0.01f);   // Small linear damping
@@ -104,6 +108,10 @@ void Robot::createBody() {
     
     // No initial velocity - let robot settle naturally
     dBodySetLinearVel(bodyId, 0.0f, 0.0f, 0.0f);
+    dBodySetAngularVel(bodyId, 0.0f, 0.0f, 0.0f); // Also zero angular velocity
+    
+    // Disable body until legs are created to prevent premature physics
+    dBodyDisable(bodyId);
     
 #ifdef DEBUG_ROBOT_INIT
     std::cout << "[Robot] Initial body Z position = " << initZ << " (total leg reach: " << totalLegLength << ")" << std::endl;
@@ -333,6 +341,9 @@ void Robot::createLegs() {
 #ifdef DEBUG_ROBOT_INIT
     std::cout << "🎉 All 6 legs created with proper hexapod anatomy!" << std::endl;
 #endif
+
+    // Re-enable body now that legs are attached
+    dBodyEnable(bodyId);
 }
 
 vsg_vec3 Robot::getLegPosition(int legIndex) const {
@@ -453,7 +464,7 @@ void Robot::applyForces() {
 }
 
 void Robot::maintainBalance() {
-    // Enhanced balance using contact points from feet
+    // Enhanced PID-based balance control
     const dReal* q = dBodyGetQuaternion(bodyId);
     vsg_quat orientation(q[1], q[2], q[3], q[0]);
     
@@ -461,15 +472,94 @@ void Robot::maintainBalance() {
     vsg_vec3 up = vsg_vec3(0, 0, 1);
     vsg_vec3 bodyUp = orientation * vsg_vec3(0, 0, 1);  // Body's up direction
     
-    // Cross product gives torque direction needed to align with vertical
-    vsg_vec3 correctionTorque = vsg::cross(bodyUp, up) * 50.0f; // Increased correction
+    // Calculate roll and pitch errors
+    vsg_vec3 euler = eulerAnglesFromQuat(orientation);
+    float rollError = euler.x;   // Target is 0
+    float pitchError = euler.y;  // Target is 0
     
-    // Also add damping to angular velocity to prevent oscillation
+    // PID control for stabilization
+    static float rollIntegral = 0.0f;
+    static float pitchIntegral = 0.0f;
+    static float lastRollError = 0.0f;
+    static float lastPitchError = 0.0f;
+    
+    const float kp = 30.0f;   // Proportional gain (reduced from 100)
+    const float ki = 5.0f;    // Integral gain (reduced from 10)
+    const float kd = 10.0f;   // Derivative gain (reduced from 20)
+    const float dt = 1.0f / 60.0f; // Physics timestep
+    
+    // Update integrals
+    rollIntegral += rollError * dt;
+    pitchIntegral += pitchError * dt;
+    
+    // Limit integral windup
+    rollIntegral = std::clamp(rollIntegral, -1.0f, 1.0f);
+    pitchIntegral = std::clamp(pitchIntegral, -1.0f, 1.0f);
+    
+    // Calculate derivatives
+    float rollDerivative = (rollError - lastRollError) / dt;
+    float pitchDerivative = (pitchError - lastPitchError) / dt;
+    
+    // PID outputs
+    float rollCorrection = kp * rollError + ki * rollIntegral + kd * rollDerivative;
+    float pitchCorrection = kp * pitchError + ki * pitchIntegral + kd * pitchDerivative;
+    
+    // Apply corrective torques with limits
     const dReal* angVel = dBodyGetAngularVel(bodyId);
+    
+    // Limit corrections to prevent overcompensation
+    rollCorrection = std::clamp(rollCorrection, -50.0f, 50.0f);
+    pitchCorrection = std::clamp(pitchCorrection, -50.0f, 50.0f);
+    
     dBodyAddTorque(bodyId, 
-        correctionTorque.x - angVel[0] * 10.0f,
-        correctionTorque.y - angVel[1] * 10.0f,
-        correctionTorque.z - angVel[2] * 10.0f);
+        -rollCorrection - angVel[0] * 5.0f,    // X-axis (roll) - reduced damping
+        -pitchCorrection - angVel[1] * 5.0f,   // Y-axis (pitch) - reduced damping
+        -angVel[2] * 2.0f);                    // Z-axis damping - reduced
+    
+    // Update last errors
+    lastRollError = rollError;
+    lastPitchError = pitchError;
+    
+    // Adjust leg positions for active stabilization
+    adjustLegsForBalance(rollError, pitchError);
+}
+
+void Robot::adjustLegsForBalance(float rollError, float pitchError) {
+    // Active stabilization by adjusting leg joint angles
+    // When tilting right (positive roll), extend left legs and retract right legs
+    // When tilting forward (positive pitch), extend rear legs and retract front legs
+    
+    const float maxAdjustment = 0.2f; // Maximum joint adjustment in radians
+    
+    for (int i = 0; i < NUM_LEGS; ++i) {
+        if (legs[i].segments.size() < 3) continue;
+        
+        // Determine leg position (left/right, front/rear)
+        int side = (i % 2 == 0) ? -1 : 1;  // -1 for left, 1 for right
+        int legPair = i / 2;  // 0=front, 1=middle, 2=rear
+        float frontRearFactor = (legPair == 0) ? -1.0f : (legPair == 2) ? 1.0f : 0.0f;
+        
+        // Calculate adjustment based on tilt
+        float rollAdjustment = -side * rollError * maxAdjustment;
+        float pitchAdjustment = frontRearFactor * pitchError * maxAdjustment;
+        
+        // Apply to knee joint (femur-tibia connection)
+        dJointID kneeJoint = legs[i].segments[static_cast<int>(LegSegmentIndex::FEMUR)].joint;
+        if (kneeJoint) {
+            float targetAngle = rollAdjustment + pitchAdjustment;
+            // Use joint motor to adjust angle
+            dJointSetHingeParam(kneeJoint, dParamVel, targetAngle * 10.0f); // Velocity control
+            dJointSetHingeParam(kneeJoint, dParamFMax, 5.0f); // Motor force
+        }
+        
+        // Also adjust ankle for better ground contact
+        dJointID ankleJoint = legs[i].segments[static_cast<int>(LegSegmentIndex::TIBIA)].joint;
+        if (ankleJoint) {
+            float ankleAdjustment = -(rollAdjustment + pitchAdjustment) * 0.5f;
+            dJointSetHingeParam(ankleJoint, dParamVel, ankleAdjustment * 10.0f);
+            dJointSetHingeParam(ankleJoint, dParamFMax, 3.0f);
+        }
+    }
 }
 
 void Robot::reset() {

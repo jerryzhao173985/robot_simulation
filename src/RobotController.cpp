@@ -1,8 +1,10 @@
 #include "RobotController.h"
 #include "Robot.h"
+#include "DebugOutput.h"
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <sstream>
 #include <fstream>
 #include "PositionUtils.h"
 
@@ -82,19 +84,65 @@ void RobotController::update(double deltaTime) {
 }
 
 void RobotController::updateManualControl(double deltaTime) {
-    // Apply direct control input
-    std::vector<float> motorCommands;
+    // Debug output
+    static int debugCounter = 0;
+    if (++debugCounter % 60 == 0) { // Once per second
+        std::cout << "[RobotController] Manual velocity: (" << manualVelocity.x << ", " << manualVelocity.y << ", " << manualVelocity.z 
+                  << ") Rotation: " << manualRotation << std::endl;
+    }
     
-    // Convert input to motor commands
-    vsg::vec3 velocity = currentInput.targetVelocity;
-    float angularVel = currentInput.targetAngularVelocity;
+    // Apply manual control from keyboard input
+    if (manualVelocity.x != 0.0f || manualVelocity.y != 0.0f || manualVelocity.z != 0.0f || manualRotation != 0.0f) {
+        // Convert world-space velocity to robot-local space
+        vsg_quat robotOrient = robot->getOrientation();
+        vsg_vec3 forward = robotOrient * vsg_vec3(1, 0, 0);
+        vsg_vec3 right = robotOrient * vsg_vec3(0, 1, 0);
+        vsg_vec3 up = vsg_vec3(0, 0, 1);
+        
+        // Calculate target velocity in world space
+        vsg_vec3 targetVel = forward * manualVelocity.x + right * manualVelocity.y + up * manualVelocity.z;
+        
+        // Robot velocity is controlled through motor commands, not direct velocity setting
+        // The targetVel and manualRotation are used to generate appropriate motor commands below
+        
+        // Generate motor commands for hexapod gait
+        std::vector<float> motorCommands(18, 0.0f); // 6 legs * 3 joints
+        
+        // Simple tripod gait for movement
+        float phase = fmod(simulationTime * 2.0, 2.0 * M_PI);
+        
+        for (int leg = 0; leg < 6; ++leg) {
+            bool isGroupA = (leg % 2 == 0); // Alternate legs
+            float legPhase = isGroupA ? phase : phase + M_PI;
+            
+            // Hip joint - controls leg swing
+            motorCommands[leg * 3 + 0] = manualVelocity.x * sin(legPhase) * 0.5f;
+            
+            // Knee joint - lifts leg during swing
+            motorCommands[leg * 3 + 1] = (sin(legPhase) > 0) ? 0.3f : -0.1f;
+            
+            // Ankle joint - maintains foot angle
+            motorCommands[leg * 3 + 2] = -motorCommands[leg * 3 + 1] * 0.5f;
+        }
+        
+        // Add turning
+        if (manualRotation != 0.0f) {
+            for (int leg = 0; leg < 6; ++leg) {
+                int side = (leg < 3) ? -1 : 1;
+                motorCommands[leg * 3 + 0] += manualRotation * side * 0.3f;
+            }
+        }
+        
+        robot->applyControl(motorCommands);
+    } else {
+        // No input - maintain stance
+        // Zero velocity is achieved by not applying motor commands
+        std::vector<float> zeroCommands(18, 0.0f);
+        robot->applyControl(zeroCommands);
+    }
     
-    // Simple mapping for demonstration
-    motorCommands.push_back(velocity.x);
-    motorCommands.push_back(velocity.z);
-    motorCommands.push_back(angularVel);
-    
-    robot->applyControl(motorCommands);
+    // Always maintain balance
+    maintainBalance(deltaTime);
 }
 
 void RobotController::updateAutonomousControl(double deltaTime) {
@@ -103,10 +151,14 @@ void RobotController::updateAutonomousControl(double deltaTime) {
         followPath(deltaTime);
     } else if (hasNavigationGoal()) {
         planPath();
+    } else {
+        // No goal - maintain stance
+        std::vector<float> zeroCommands(18, 0.0f);
+        robot->applyControl(zeroCommands);
     }
     
     // Avoid obstacles
-    if (obstacleAvoidanceEnabled) {
+    if (obstacleAvoidanceEnabled && !navigationPath.empty()) {
         avoidObstacles();
     }
     
@@ -278,7 +330,7 @@ void RobotController::maintainBalance(float deltaTime) {
     float rollCorr  = rollController.update(-euler.z, deltaTime);
 
     // Scale corrective forces for body weight support (tunable)
-    static constexpr float balanceForceScale = 200.0f;
+    static constexpr float balanceForceScale = 50.0f; // Reduced from 200 to prevent overcorrection
 
     // Apply contact-based support forces on each foot
     auto footGeoms = robot->getFootGeoms();
@@ -299,11 +351,12 @@ void RobotController::maintainBalance(float deltaTime) {
     // Debug log every ~60 calls (~1s at 60Hz)
     static int dbgCounter = 0;
     if (++dbgCounter % 60 == 0) {
-        std::cout << "[Balance] pitch=" << euler.x
-                  << " roll=" << euler.z
-                  << " contactCount=" << totalContacts
-                  << " gain=" << (pitchCorr + rollCorr) * balanceForceScale
-                  << std::endl;
+        std::stringstream ss;
+        ss << "Balance: pitch=" << euler.x
+           << " roll=" << euler.z
+           << " contactCount=" << totalContacts
+           << " gain=" << (pitchCorr + rollCorr) * balanceForceScale;
+        DEBUG_VERBOSE(ss.str());
     }
 }
 

@@ -94,75 +94,7 @@
 
 #include "PositionUtils.h"
 
-#ifndef USE_OPENGL_FALLBACK
-// InputHandler class for VSG keyboard/mouse input
-class Visualizer::InputHandler : public vsg::Inherit<vsg::Visitor, Visualizer::InputHandler> {
-public:
-    Visualizer* visualizer;
-    
-    InputHandler(Visualizer* viz) : visualizer(viz) {}
-    
-    void apply(vsg::KeyPressEvent& keyPress) override {
-        // Handle key press
-        visualizer->handleKeyPress(keyPress.keyBase);
-        
-        // Special handling for specific keys
-        switch (keyPress.keyBase) {
-            case 'w': case 'W':
-            case 'a': case 'A':
-            case 's': case 'S':
-            case 'd': case 'D':
-            case 'q': case 'Q':
-            case 'e': case 'E':
-                visualizer->keyStates[keyPress.keyBase] = true;
-                break;
-                
-            case ' ': // Space - toggle manual control
-                visualizer->setManualControlEnabled(!visualizer->isManualControlEnabled());
-                std::cout << "Manual control: " << (visualizer->isManualControlEnabled() ? "ENABLED" : "DISABLED") << std::endl;
-                break;
-                
-            case 'c': case 'C': // Cycle camera modes
-                visualizer->cycleCamera();
-                break;
-                
-            case 'h': case 'H': // Toggle help/controls overlay
-                visualizer->showControlsOverlay = !visualizer->showControlsOverlay;
-                break;
-                
-            case 'r': case 'R': // Reset camera
-                visualizer->setCameraMode("follow");
-                break;
-                
-            case vsg::KEY_F1: // Toggle stats
-                visualizer->showStatistics = !visualizer->showStatistics;
-                break;
-                
-            case vsg::KEY_F2: // Toggle shadows
-                visualizer->shadowsEnabled = !visualizer->shadowsEnabled;
-                break;
-                
-            case vsg::KEY_F3: // Toggle SSAO
-                visualizer->ssaoEnabled = !visualizer->ssaoEnabled;
-                break;
-        }
-    }
-    
-    void apply(vsg::KeyReleaseEvent& keyRelease) override {
-        // Handle key release
-        visualizer->handleKeyRelease(keyRelease.keyBase);
-        visualizer->keyStates[keyRelease.keyBase] = false;
-    }
-    
-    void apply(vsg::MoveEvent& moveEvent) override {
-        // Could handle mouse movement for camera control here
-    }
-    
-    void apply(vsg::ButtonPressEvent& buttonPress) override {
-        // Could handle mouse button presses here
-    }
-};
-#endif
+// Internal InputHandler removed - using external InputHandler from main.cpp
 
 Visualizer::Visualizer(uint32_t width, uint32_t height) 
     : windowWidth(width), windowHeight(height) {
@@ -288,6 +220,11 @@ bool Visualizer::initialize() {
         windowTraits->height = windowHeight;
         windowTraits->decoration = true;
         windowTraits->samples = msaaSamples;
+        windowTraits->fullscreen = false;
+        
+        // Debug print traits
+        std::cout << "[Visualizer] Window traits: " << windowWidth << "x" << windowHeight 
+                  << " samples=" << msaaSamples << std::endl;
         
         // 3. Create window
         window = vsg::Window::create(windowTraits);
@@ -327,11 +264,10 @@ bool Visualizer::initialize() {
         
         // 8. Add event handlers
         viewer->addEventHandler(vsg::CloseHandler::create(viewer));
-        viewer->addEventHandler(vsg::Trackball::create(vsgCamera));
+        // DISABLED: Trackball might be intercepting key events
+        // viewer->addEventHandler(vsg::Trackball::create(vsgCamera));
         
-        // Add our custom input handler
-        inputHandler = InputHandler::create(this);
-        viewer->addEventHandler(inputHandler);
+        // Input handler is now added externally from main.cpp
         
         // 9. Create command graph using modern simplified approach
         auto commandGraph = vsg::createCommandGraphForView(window, vsgCamera, sceneRoot);
@@ -359,6 +295,8 @@ bool Visualizer::initialize() {
         viewer->compile();
         
         std::cout << "VSG initialization complete with modern API patterns" << std::endl;
+        std::cout << "Window extent: " << window->extent2D().width << "x" << window->extent2D().height << std::endl;
+        std::cout << "Viewer active: " << viewer->active() << std::endl;
         return true;
 #endif
     } catch (const std::exception& e) {
@@ -408,6 +346,13 @@ void Visualizer::render() {
         
         viewer->recordAndSubmit();
         viewer->present();
+    } else {
+        static bool warnedOnce = false;
+        if (!warnedOnce) {
+            std::cout << "WARNING: viewer->advanceToNextFrame() returned false!" << std::endl;
+            std::cout << "Viewer active: " << viewer->active() << std::endl;
+            warnedOnce = true;
+        }
     }
 #endif
 }
@@ -416,9 +361,43 @@ bool Visualizer::shouldClose() const {
 #ifdef USE_OPENGL_FALLBACK
     return glfwWindowShouldClose(window);
 #else
-    return !viewer->active();
+    bool active = viewer->active();
+    static bool firstCheck = true;
+    if (firstCheck) {
+        std::cout << "[Visualizer::shouldClose] First check - viewer->active() = " << active << std::endl;
+        if (window) {
+            std::cout << "[Visualizer::shouldClose] Window valid = true" << std::endl;
+            std::cout << "[Visualizer::shouldClose] Window visible = " << window->visible() << std::endl;
+        }
+        firstCheck = false;
+    }
+    return !active;
 #endif
 }
+
+void Visualizer::close() {
+#ifdef USE_OPENGL_FALLBACK
+    if (window) {
+        glfwSetWindowShouldClose(window, GLFW_TRUE);
+    }
+#else
+    if (viewer) {
+        viewer->close();
+    }
+#endif
+}
+
+#ifndef USE_OPENGL_FALLBACK
+void Visualizer::addEventHandler(vsg::ref_ptr<vsg::Visitor> handler) {
+    if (viewer && handler) {
+        viewer->addEventHandler(handler);
+        std::cout << "[Visualizer] Added event handler: " << handler << std::endl;
+        std::cout << "[Visualizer] Total event handlers: " << viewer->getEventHandlers().size() << std::endl;
+    } else {
+        std::cout << "[Visualizer] ERROR: Cannot add event handler - viewer=" << viewer << " handler=" << handler << std::endl;
+    }
+}
+#endif
 
 #ifdef USE_OPENGL_FALLBACK
 void Visualizer::renderOpenGL() {
@@ -638,15 +617,24 @@ void Visualizer::updateCamera() {
         lastRobotPos = vsg_vec3(matrix[3][0], matrix[3][1], matrix[3][2]);
     }
     
-    if (currentCameraMode == "follow") {
+    if (currentCameraMode == CameraMode::FOLLOW) {
         // Follow robot from behind and above
         vsg::dvec3 robotPos(lastRobotPos.x, lastRobotPos.y, lastRobotPos.z);
+        
+        // Clamp robot position to reasonable bounds
+        robotPos.z = std::clamp(robotPos.z, 0.5, 5.0);
+        
         vsg::dvec3 offset(-camera.followDistance, 0, camera.followHeight);
-        lookAt->eye = robotPos + offset;
+        vsg::dvec3 eyePos = robotPos + offset;
+        
+        // Ensure camera doesn't go below ground
+        eyePos.z = std::max(eyePos.z, 1.0);
+        
+        lookAt->eye = eyePos;
         lookAt->center = robotPos;
         lookAt->up = vsg::dvec3(0.0, 0.0, 1.0);
     }
-    else if (currentCameraMode == "orbit") {
+    else if (currentCameraMode == CameraMode::ORBIT) {
         // Orbit around robot
         static double orbitAngle = 0.0;
         orbitAngle += 0.01; // Slow rotation
@@ -661,21 +649,25 @@ void Visualizer::updateCamera() {
         lookAt->center = robotPos;
         lookAt->up = vsg::dvec3(0.0, 0.0, 1.0);
     }
-    else if (currentCameraMode == "top") {
+    else if (currentCameraMode == CameraMode::TOP) {
         // Top-down view
         vsg::dvec3 robotPos(lastRobotPos.x, lastRobotPos.y, lastRobotPos.z);
+        
+        // Clamp robot position
+        robotPos.z = std::clamp(robotPos.z, 0.5, 5.0);
+        
         lookAt->eye = robotPos + vsg::dvec3(0.0, 0.0, 20.0);
         lookAt->center = robotPos;
         lookAt->up = vsg::dvec3(0.0, 1.0, 0.0);
     }
-    else if (currentCameraMode == "front") {
+    else if (currentCameraMode == CameraMode::FRONT) {
         // Front view
         vsg::dvec3 robotPos(lastRobotPos.x, lastRobotPos.y, lastRobotPos.z);
         lookAt->eye = robotPos + vsg::dvec3(0.0, -15.0, 5.0);
         lookAt->center = robotPos;
         lookAt->up = vsg::dvec3(0.0, 0.0, 1.0);
     }
-    else if (currentCameraMode == "side") {
+    else if (currentCameraMode == CameraMode::SIDE) {
         // Side view
         vsg::dvec3 robotPos(lastRobotPos.x, lastRobotPos.y, lastRobotPos.z);
         lookAt->eye = robotPos + vsg::dvec3(15.0, 0.0, 5.0);
@@ -945,7 +937,7 @@ void Visualizer::updateStats() {
         std::stringstream stats;
         stats << "FPS: " << std::fixed << std::setprecision(1) << fps << "\n";
         stats << "Frame time: " << std::fixed << std::setprecision(2) << renderTime << " ms\n";
-        stats << "Camera: " << currentCameraMode << "\n";
+        stats << "Camera: " << getCameraModeString() << "\n";
         if (manualControlEnabled) {
             stats << "Manual Control: ACTIVE\n";
             stats << "Velocity: (" << std::fixed << std::setprecision(2) 
@@ -956,7 +948,8 @@ void Visualizer::updateStats() {
             stats << "Manual Control: OFF";
         }
         
-        updateTextOverlay(stats.str(), "");
+        // Update text overlay would go here
+        // Currently text updates are handled from main.cpp
         
         if (frameCount % 60 == 0) {
             std::cout << "Frame: " << frameCount << ", FPS: " << fps << std::endl;
@@ -978,19 +971,7 @@ void Visualizer::updateRobotTransform(const vsg_vec3& position, const vsg_quat& 
         // Force VSG to update by marking as modified
         // In VSG, transforms are automatically updated when matrix changes
         
-        // Debug output - every frame for the first 180 frames to see what's happening
-        static int frameCount = 0;
-        if (frameCount < 180 || frameCount % 60 == 0) {
-            std::cout << "Frame " << frameCount << " - Robot transform updated:" << std::endl;
-            std::cout << "  Position: (" << position.x << ", " << position.y << ", " << position.z << ")" << std::endl;
-            std::cout << "  Orientation: (" << orientation.x << ", " << orientation.y << ", " << orientation.z << ", " << orientation.w << ")" << std::endl;
-            std::cout << "  Transform ptr: " << robotTransform.get() << " Matrix ptr: " << &robotTransform->matrix << std::endl;
-            
-            // Print first few values of the matrix to verify it's being set
-            auto& m = robotTransform->matrix;
-            std::cout << "  Matrix[3]: (" << m[3][0] << ", " << m[3][1] << ", " << m[3][2] << ")" << std::endl;
-        }
-        frameCount++;
+        // Debug output disabled - use V key to enable debug mode if needed
     } else {
         static bool warned = false;
         if (!warned) {
@@ -1118,8 +1099,8 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
     vsg::StateInfo stateInfo;
     
     geomInfo.position.set(0.0f, 0.0f, -0.01f);     // slightly below Z=0
-    geomInfo.dx.set(10.0f, 0.0f, 0.0f);            // X extent
-    geomInfo.dy.set(0.0f, 10.0f, 0.0f);            // Y extent
+    geomInfo.dx.set(50.0f, 0.0f, 0.0f);            // X extent - increased from 10
+    geomInfo.dy.set(0.0f, 50.0f, 0.0f);            // Y extent - increased from 10
     geomInfo.color = vsg::vec4(0.7f, 0.7f, 0.7f, 1.0f); // Light gray
     
     // Ground appearance
@@ -1557,91 +1538,221 @@ void Visualizer::handleKeyRelease(int key) {
     handleKeyPress(key); // Recalculate velocity
 }
 
-void Visualizer::setCameraMode(const std::string& mode) {
+void Visualizer::setCameraMode(CameraMode mode) {
     currentCameraMode = mode;
-    std::cout << "Camera mode changed to: " << mode << std::endl;
+    
+    // Reset camera parameters based on mode
+    switch (mode) {
+        case CameraMode::FOLLOW:
+            camera.followRobot = true;
+            camera.followDistance = 5.0f;
+            camera.followHeight = 3.0f;
+            break;
+            
+        case CameraMode::FREE:
+            camera.followRobot = false;
+            // Keep current position
+            break;
+            
+        case CameraMode::ORBIT:
+            camera.followRobot = true;
+            camera.followDistance = 8.0f;
+            camera.followHeight = 4.0f;
+            camera.orbitAngle = 0.0f;
+            break;
+            
+        case CameraMode::TOP:
+            camera.followRobot = true;
+            camera.position = robotPosition + vsg_vec3(0, 0, 10);
+            camera.target = robotPosition;
+            camera.up = vsg_vec3(0, 1, 0);
+            break;
+            
+        case CameraMode::FRONT:
+            camera.followRobot = true;
+            camera.position = robotPosition + vsg_vec3(8, 0, 2);
+            camera.target = robotPosition;
+            break;
+            
+        case CameraMode::SIDE:
+            camera.followRobot = true;
+            camera.position = robotPosition + vsg_vec3(0, 8, 2);
+            camera.target = robotPosition;
+            break;
+    }
+    
+    std::cout << "Camera mode: " << getCameraModeString() << std::endl;
+}
+
+void Visualizer::setCameraMode(const std::string& mode) {
+    if (mode == "follow") setCameraMode(CameraMode::FOLLOW);
+    else if (mode == "free") setCameraMode(CameraMode::FREE);
+    else if (mode == "orbit") setCameraMode(CameraMode::ORBIT);
+    else if (mode == "top") setCameraMode(CameraMode::TOP);
+    else if (mode == "front") setCameraMode(CameraMode::FRONT);
+    else if (mode == "side") setCameraMode(CameraMode::SIDE);
 }
 
 void Visualizer::cycleCamera() {
-    static std::vector<std::string> modes = {"follow", "free", "orbit", "top", "front", "side"};
-    cameraIndex = (cameraIndex + 1) % modes.size();
-    setCameraMode(modes[cameraIndex]);
+    int nextMode = (static_cast<int>(currentCameraMode) + 1) % 6;
+    setCameraMode(static_cast<CameraMode>(nextMode));
+}
+
+void Visualizer::adjustCameraDistance(float delta) {
+    if (currentCameraMode == CameraMode::FREE || 
+        currentCameraMode == CameraMode::FOLLOW || 
+        currentCameraMode == CameraMode::ORBIT) {
+        camera.followDistance = std::clamp(camera.followDistance + delta, 2.0f, 20.0f);
+        
+        // Also adjust free camera distance
+        if (currentCameraMode == CameraMode::FREE) {
+            vsg_vec3 dir = camera.position - camera.target;
+            float currentDist = vsg::length(dir);
+            if (currentDist > 0.1f) {
+                dir = vsg::normalize(dir);
+                camera.position = camera.target + dir * (currentDist + delta);
+            }
+        }
+    }
 }
 
 #ifndef USE_OPENGL_FALLBACK
 void Visualizer::createTextOverlay() {
-    if (!font || !sceneRoot) return;
+    if (!font || !scene) return;
     
-    // Create stats text
+    // Create text group for overlay
+    textGroup = vsg::Group::create();
+    
+    // Create stats text with transform for positioning
     {
+        statsTransform = vsg::MatrixTransform::create();
+        statsTransform->matrix = vsg::translate(vsg::dvec3(20.0, 20.0, 0.0));
+        
         auto layout = vsg::StandardLayout::create();
-        layout->position = vsg::vec3(10.0f, 10.0f, 0.0f);
-        layout->horizontal = vsg::vec3(1.0f, 0.0f, 0.0f);
-        layout->vertical = vsg::vec3(0.0f, 1.0f, 0.0f);
-        layout->color = vsg::vec4(1.0f, 1.0f, 1.0f, 0.9f);
-        layout->outlineWidth = 0.1f;
+        layout->position = vsg::vec3(0.0f, 0.0f, 0.0f);
+        layout->horizontal = vsg::vec3(16.0f, 0.0f, 0.0f);
+        layout->vertical = vsg::vec3(0.0f, 20.0f, 0.0f);
+        layout->color = vsg::vec4(1.0f, 1.0f, 1.0f, 0.95f);
+        layout->outlineWidth = 0.15f;
         layout->outlineColor = vsg::vec4(0.0f, 0.0f, 0.0f, 1.0f);
         
         statsText = vsg::Text::create();
-        statsText->text = vsg::stringValue::create("Robot Stats\nFPS: 0\nPosition: (0, 0, 0)");
+        statsText->text = vsg::stringValue::create("Initializing...");
         statsText->font = font;
         statsText->layout = layout;
         statsText->technique = vsg::GpuLayoutTechnique::create();
-        statsText->setup(512); // Allocate space for dynamic updates
+        statsText->setup(1024); // Allocate space for dynamic updates
         
-        // Add to scene as overlay
-        sceneRoot->addChild(statsText);
+        statsTransform->addChild(statsText);
+        textGroup->addChild(statsTransform);
     }
     
-    // Create controls text
+    // Create controls text with transform
     {
+        controlsTransform = vsg::MatrixTransform::create();
+        controlsTransform->matrix = vsg::translate(vsg::dvec3(windowWidth - 300.0, 20.0, 0.0));
+        
         auto layout = vsg::StandardLayout::create();
-        layout->position = vsg::vec3(10.0f, 100.0f, 0.0f);
-        layout->horizontal = vsg::vec3(1.0f, 0.0f, 0.0f);
-        layout->vertical = vsg::vec3(0.0f, 1.0f, 0.0f);
-        layout->color = vsg::vec4(0.8f, 0.8f, 1.0f, 0.9f);
-        layout->outlineWidth = 0.1f;
+        layout->position = vsg::vec3(0.0f, 0.0f, 0.0f);
+        layout->horizontal = vsg::vec3(14.0f, 0.0f, 0.0f);
+        layout->vertical = vsg::vec3(0.0f, 18.0f, 0.0f);
+        layout->color = vsg::vec4(0.9f, 0.9f, 1.0f, 0.9f);
+        layout->outlineWidth = 0.15f;
         layout->outlineColor = vsg::vec4(0.0f, 0.0f, 0.0f, 1.0f);
         
         controlsText = vsg::Text::create();
         controlsText->text = vsg::stringValue::create(
-            "Controls:\n"
+            "=== CONTROLS ===\n"
             "WASD - Move robot\n"
-            "Q/E - Up/Down\n"
-            "Space - Toggle manual control\n"
-            "C - Cycle camera\n"
-            "H - Toggle this help\n"
-            "F1 - Toggle stats\n"
-            "F2 - Toggle shadows\n"
-            "F3 - Toggle SSAO"
+            "Q/E  - Up/Down\n"
+            "Alt+A/D - Strafe\n"
+            "Shift - Sprint\n"
+            "Space - Manual control\n"
+            "C - Camera mode\n"
+            "H - Toggle help\n"
+            "1/2/3 - AI modes\n"
+            "R - Reset robot\n"
+            "F1 - Stats\n"
+            "F2 - Shadows\n"
+            "F3 - SSAO\n"
+            "ESC - Exit"
         );
         controlsText->font = font;
         controlsText->layout = layout;
+        controlsText->technique = vsg::GpuLayoutTechnique::create();
         controlsText->setup(0, textOptions);
         
-        sceneRoot->addChild(controlsText);
+        controlsTransform->addChild(controlsText);
+        textGroup->addChild(controlsTransform);
+    }
+    
+    // Initially hide controls
+    controlsTransform->children.clear();
+    
+    // Add text group to scene
+    scene->addChild(textGroup);
+}
+
+void Visualizer::updateStatsText(float fps, float frameTime, const vsg_vec3& robotPos, 
+                                const vsg_vec3& robotVel, bool stable, const std::string& controlMode) {
+    if (!statsText || !statsText->text) return;
+    
+    if (auto text_string = statsText->text.cast<vsg::stringValue>()) {
+        std::stringstream ss;
+        ss << std::fixed << std::setprecision(1);
+        ss << "=== ROBOT STATUS ===" << std::endl;
+        ss << "FPS: " << fps << " (" << frameTime << "ms)" << std::endl;
+        ss << "Position: (" << robotPos.x << ", " << robotPos.y << ", " << robotPos.z << ")" << std::endl;
+        ss << "Velocity: " << vsg::length(robotVel) << " m/s" << std::endl;
+        ss << "Stable: " << (stable ? "YES" : "NO") << std::endl;
+        ss << "Mode: " << controlMode << std::endl;
+        ss << "Camera: " << getCameraModeString() << std::endl;
+        
+        text_string->value() = ss.str();
+        statsText->setup();
     }
 }
 
-void Visualizer::updateTextOverlay(const std::string& stats, const std::string& controls) {
-    if (statsText && statsText->text) {
-        if (auto text_string = statsText->text.cast<vsg::stringValue>()) {
-            text_string->value() = stats;
-            statsText->setup();
+void Visualizer::updateControlsText(bool visible) {
+    if (!controlsTransform) return;
+    
+    if (visible && controlsTransform->children.empty()) {
+        controlsTransform->addChild(controlsText);
+    } else if (!visible && !controlsTransform->children.empty()) {
+        controlsTransform->children.clear();
+    }
+}
+
+void Visualizer::setTextVisible(bool stats, bool controls) {
+    statsVisible = stats;
+    controlsVisible = controls;
+    
+    if (statsTransform) {
+        if (stats && statsTransform->children.empty()) {
+            statsTransform->addChild(statsText);
+        } else if (!stats && !statsTransform->children.empty()) {
+            statsTransform->children.clear();
         }
     }
     
-    if (controlsText && controlsText->text && !controls.empty()) {
-        if (auto text_string = controlsText->text.cast<vsg::stringValue>()) {
-            text_string->value() = controls;
-            controlsText->setup();
-        }
+    updateControlsText(controls);
+}
+
+std::string Visualizer::getCameraModeString() const {
+    switch (currentCameraMode) {
+        case CameraMode::FOLLOW: return "Follow";
+        case CameraMode::FREE: return "Free";
+        case CameraMode::ORBIT: return "Orbit";
+        case CameraMode::TOP: return "Top";
+        case CameraMode::FRONT: return "Front";
+        case CameraMode::SIDE: return "Side";
+        default: return "Unknown";
     }
 }
 #else
 // Stub implementations for OpenGL fallback
 void Visualizer::createTextOverlay() {}
-void Visualizer::updateTextOverlay(const std::string&, const std::string&) {}
+// Text overlay methods are implemented in createTextOverlay, updateStatsText, and updateControlsText
 #endif
 
 void Visualizer::addSkybox(const std::string& skyboxPath) {

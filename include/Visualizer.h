@@ -85,6 +85,15 @@ public:
 #endif
     };
 
+    enum class CameraMode {
+        FOLLOW = 0,
+        FREE,
+        ORBIT,
+        TOP,
+        FRONT,
+        SIDE
+    };
+
     struct Camera {
         vsg_vec3 position;
         vsg_vec3 target;
@@ -95,6 +104,8 @@ public:
         bool followRobot;
         float followDistance;
         float followHeight;
+        float orbitAngle = 0.0f;
+        float orbitSpeed = 0.5f;
     };
 
     Visualizer(uint32_t width = 1920, uint32_t height = 1080);
@@ -103,6 +114,12 @@ public:
     bool initialize();
     void render();
     bool shouldClose() const;
+    void close(); // Request window close
+    
+#ifndef USE_OPENGL_FALLBACK
+    // Add event handler to viewer
+    void addEventHandler(vsg::ref_ptr<vsg::Visitor> handler);
+#endif
     
     // Scene management
 #ifdef USE_OPENGL_FALLBACK
@@ -117,7 +134,9 @@ public:
     void setCameraPosition(const vsg_vec3& position);
     void setCameraTarget(const vsg_vec3& target);
     void enableCameraFollow(bool enable, const vsg_vec3& targetPos = vsg_vec3());
-    void setCameraMode(int mode) { cameraMode = mode; }
+    void setCameraMode(CameraMode mode);
+    CameraMode getCameraMode() const { return currentCameraMode; }
+    void adjustCameraDistance(float delta);
     
     // Lighting
     void addDirectionalLight(const vsg_vec3& direction, const vsg_vec3& color, float intensity);
@@ -174,20 +193,23 @@ public:
     
     // Text rendering
     void createTextOverlay();
-    void updateTextOverlay(const std::string& stats, const std::string& controls);
+    void updateStatsText(float fps, float frameTime, const vsg_vec3& robotPos, 
+                        const vsg_vec3& robotVel, bool stable, const std::string& controlMode);
+    void updateControlsText(bool visible);
+    void setShadowsEnabled(bool enable) { shadowsEnabled = enable; }
+    void setTextVisible(bool stats, bool controls);
     
     // Camera controls  
     void setCameraMode(const std::string& mode);
     void cycleCamera();
+    std::string getCameraModeString() const;
 
 #ifndef USE_OPENGL_FALLBACK
     // Modern VSG scene creation methods
     vsg::ref_ptr<vsg::Group> createScene(vsg::ref_ptr<vsg::Options> options);
     void setupModernLighting(vsg::ref_ptr<vsg::Group> scene);
     
-    // VSG Input handler
-    class InputHandler;
-    vsg::ref_ptr<InputHandler> inputHandler;
+    // Input handler removed - now handled externally
 #endif
 
 private:
@@ -232,7 +254,9 @@ private:
     
     // Camera
     Camera camera;
-    int cameraMode = 0; // 0: free, 1: follow, 2: orbit
+    CameraMode currentCameraMode = CameraMode::FOLLOW;
+    vsg_vec3 robotPosition;
+    vsg_quat robotOrientation;
     
     // Lighting
     std::vector<Light> lights;
@@ -271,13 +295,14 @@ private:
     
     // Text rendering
 #ifndef USE_OPENGL_FALLBACK
+    vsg::ref_ptr<vsg::Group> textGroup;
     vsg::ref_ptr<vsg::Text> statsText;
     vsg::ref_ptr<vsg::Text> controlsText;
     vsg::ref_ptr<vsg::Font> font;
     vsg::ref_ptr<vsg::Options> textOptions;
+    vsg::ref_ptr<vsg::MatrixTransform> statsTransform;
+    vsg::ref_ptr<vsg::MatrixTransform> controlsTransform;
+    bool statsVisible = true;
+    bool controlsVisible = false;
 #endif
-    
-    // Camera modes
-    std::string currentCameraMode = "follow";
-    int cameraIndex = 0;
 };

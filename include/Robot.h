@@ -123,6 +123,7 @@ private:
     vsg_vec3 getLegPosition(int legIndex) const;
     void applyForces();
     void maintainBalance();
+    void adjustLegsForBalance(float rollError, float pitchError);
     
     std::mutex navigationMutex;
 
