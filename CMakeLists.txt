@@ -144,10 +144,10 @@ add_executable(vsg_ode_robot
     src/main.cpp src/Robot.cpp src/PhysicsWorld.cpp
     src/RobotController.cpp src/Terrain.cpp src/Visualizer.cpp)
 
-# Add physics test executable
-add_executable(test_physics
-    src/test_physics.cpp src/Robot.cpp src/PhysicsWorld.cpp
-    src/RobotController.cpp src/Terrain.cpp src/Visualizer.cpp)
+# Add physics test executable (commented out - file doesn't exist)
+# add_executable(test_physics
+#     src/test_physics.cpp src/Robot.cpp src/PhysicsWorld.cpp
+#     src/RobotController.cpp src/Terrain.cpp src/Visualizer.cpp)
 
 # Link libraries based on available graphics backend
 if(USE_OPENGL_FALLBACK)
@@ -172,18 +172,18 @@ endif()
 
 # Link test executable
 if(USE_OPENGL_FALLBACK)
-    target_compile_definitions(test_physics PRIVATE USE_OPENGL_FALLBACK)
-    target_link_libraries(test_physics
-        ${ODE_LIBRARIES} 
-        Threads::Threads
-        OpenGL::GL 
-        glfw)
+    # target_compile_definitions(test_physics PRIVATE USE_OPENGL_FALLBACK)
+    # target_link_libraries(test_physics
+    #     ${ODE_LIBRARIES} 
+    #     Threads::Threads
+    #     OpenGL::GL 
+    #     glfw)
 else()
-    target_link_libraries(test_physics
-        vsg::vsg 
-        vsgXchange::vsgXchange
-        ${ODE_LIBRARIES} 
-        Threads::Threads)
+    # target_link_libraries(test_physics
+    #     vsg::vsg 
+    #     vsgXchange::vsgXchange
+    #     ${ODE_LIBRARIES} 
+    #     Threads::Threads)
 endif()
 
 # ---- Shader bundle ------------------------------------------------------

@@ -67,6 +67,7 @@ public:
 
     void update(double deltaTime);
     void setControlMode(ControlMode mode) { controlMode = mode; }
+    ControlMode getControlMode() const { return controlMode; }
     void setControlInput(const ControlInput& input) { currentInput = input; }
     
     // Navigation

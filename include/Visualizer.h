@@ -59,12 +59,18 @@
 #else
 #include <vsg/all.h>
 #include <vsgXchange/all.h>
+#include <vsg/text/Text.h>
+#include <vsg/text/Font.h>
+#include <vsg/text/StandardLayout.h>
+#include <vsg/text/GpuLayoutTechnique.h>
     using vsg_vec3 = vsg::vec3;
     using vsg_vec4 = vsg::vec4;  
     using vsg_quat = vsg::quat;
 #endif
 
 #include <memory>
+#include <map>
+#include <string>
 
 class Visualizer {
 public:
@@ -159,10 +165,29 @@ public:
     void createLighting();
     void addBox(const vsg_vec3& position, const vsg_vec3& size, const vsg_vec4& color);
 
+    // Input handling
+    void handleKeyPress(int key);
+    void handleKeyRelease(int key);
+    void setManualControlEnabled(bool enabled) { manualControlEnabled = enabled; }
+    bool isManualControlEnabled() const { return manualControlEnabled; }
+    vsg_vec3 getManualControlVelocity() const { return manualControlVelocity; }
+    
+    // Text rendering
+    void createTextOverlay();
+    void updateTextOverlay(const std::string& stats, const std::string& controls);
+    
+    // Camera controls  
+    void setCameraMode(const std::string& mode);
+    void cycleCamera();
+
 #ifndef USE_OPENGL_FALLBACK
     // Modern VSG scene creation methods
     vsg::ref_ptr<vsg::Group> createScene(vsg::ref_ptr<vsg::Options> options);
     void setupModernLighting(vsg::ref_ptr<vsg::Group> scene);
+    
+    // VSG Input handler
+    class InputHandler;
+    vsg::ref_ptr<InputHandler> inputHandler;
 #endif
 
 private:
@@ -238,4 +263,21 @@ private:
     double renderTime = 0.0;
     uint32_t frameCount = 0;
     std::chrono::high_resolution_clock::time_point lastTime;
+    
+    // Input handling
+    bool manualControlEnabled = false;
+    vsg_vec3 manualControlVelocity;
+    std::map<int, bool> keyStates;
+    
+    // Text rendering
+#ifndef USE_OPENGL_FALLBACK
+    vsg::ref_ptr<vsg::Text> statsText;
+    vsg::ref_ptr<vsg::Text> controlsText;
+    vsg::ref_ptr<vsg::Font> font;
+    vsg::ref_ptr<vsg::Options> textOptions;
+#endif
+    
+    // Camera modes
+    std::string currentCameraMode = "follow";
+    int cameraIndex = 0;
 };
