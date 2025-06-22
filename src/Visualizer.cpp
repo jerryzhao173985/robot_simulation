@@ -232,6 +232,9 @@ bool Visualizer::initialize() {
         windowTraits->samples = msaaSamples;
         windowTraits->fullscreen = false;
         
+        // Disable VSync for better performance (especially on macOS)
+        windowTraits->swapchainPreferences.presentMode = VK_PRESENT_MODE_IMMEDIATE_KHR;
+        
         // Window traits configured
         
         // 3. Create window
@@ -1166,8 +1169,9 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
     geomInfo.transform = vsg::dmat4();
 
     // ------------------------------
-    // Hexapod legs - proper 3-segment design with natural angles
+    // Hexapod legs - DISABLED for dynamic leg visualization from Robot class
     // ------------------------------
+    /*
     // Using leg dimensions already defined above for consistency
     const double segmentRadius = 0.04;  // consistent segment thickness
 
@@ -1396,6 +1400,7 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
 #endif
         }
     }
+    */
     
     // Add the robot body transform to the scene (legs will be added dynamically)
     scene->addChild(robotTransform);

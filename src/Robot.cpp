@@ -52,8 +52,8 @@ Robot::Robot(dWorldID world, dSpaceID space,
     createActuators();
     
     // Initialize visual representation
-    // DISABLED: Using static visualization from Visualizer.cpp instead
-    // createVisualModel();
+    createVisualModel();
+    // Don't add to scene here - will be done from main.cpp after setting parent
     // addToScene(sceneGraph);
     
 #ifdef DEBUG_ROBOT_INIT
@@ -465,16 +465,9 @@ void Robot::update(double deltaTime) {
     
     // Update visual transform to match physics body
 #ifndef USE_OPENGL_FALLBACK
-    // Visual representation handled by Visualizer - sync robot transform
-    if (robotTransform) {
-        const dReal* pos = dBodyGetPosition(bodyId);
-        const dReal* q = dBodyGetQuaternion(bodyId);
-        
-        vsg::dquat orientation(q[1], q[2], q[3], q[0]); // ODE: w,x,y,z -> VSG: x,y,z,w
-        vsg::dvec3 position(pos[0], pos[1], pos[2]);
-        
-        robotTransform->matrix = vsg::translate(position) * vsg::rotate(orientation);
-    }
+    // Don't update transform here if we're using Visualizer's robotTransform
+    // The main loop calls visualizer->updateRobotTransform() instead
+    // This prevents duplicate/conflicting transform updates
 #endif
 }
 
