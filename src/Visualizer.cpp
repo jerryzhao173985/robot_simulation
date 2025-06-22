@@ -1166,12 +1166,31 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
     geomInfo.transform = vsg::dmat4();
 
     // ------------------------------
-    // Dynamic legs will be added by Robot class
+    // Hexapod legs - proper 3-segment design with natural angles
     // ------------------------------
-    // Legs are now created dynamically by the Robot class
-    // and will be synchronized with physics simulation
+    // Using leg dimensions already defined above for consistency
+    const double segmentRadius = 0.04;  // consistent segment thickness
+
+    // Define leg and joint colors
+    const auto legColor   = vsg::vec4(0.2f, 0.2f, 0.2f, 1.0f);
+    const auto jointColor = vsg::vec4(0.15f, 0.15f, 0.15f, 1.0f);
+
+    // Material states (lighting enabled, wireframe off)
+    vsg::StateInfo legState;
+    legState.lighting  = true;
+    legState.wireframe = false;
+
+    vsg::StateInfo jointState;
+    jointState.lighting  = true;
+    jointState.wireframe = false;
     
-    /* Static leg creation removed - legs are now dynamic
+    // Leg attachment points - 3 pairs along body sides
+    std::vector<double> legXPositions = { 
+        -bodyLength * 0.3,   // front legs
+         0.0,                // middle legs  
+         bodyLength * 0.3    // rear legs
+    };
+    
     for (int legPair = 0; legPair < 3; ++legPair)
     {
         double legX = legXPositions[legPair];
@@ -1377,7 +1396,6 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
 #endif
         }
     }
-    */
     
     // Add the robot body transform to the scene (legs will be added dynamically)
     scene->addChild(robotTransform);

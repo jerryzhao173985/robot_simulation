@@ -52,8 +52,9 @@ Robot::Robot(dWorldID world, dSpaceID space,
     createActuators();
     
     // Initialize visual representation
-    createVisualModel();
-    addToScene(sceneGraph);
+    // DISABLED: Using static visualization from Visualizer.cpp instead
+    // createVisualModel();
+    // addToScene(sceneGraph);
     
 #ifdef DEBUG_ROBOT_INIT
     std::cout << "🦾 Robot initialized with proper hexapod anatomy!" << std::endl;
