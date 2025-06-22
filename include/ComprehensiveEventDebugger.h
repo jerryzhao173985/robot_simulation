@@ -118,10 +118,16 @@ public:
     }
 
     void apply(vsg::ConfigureWindowEvent& event) override {
-        std::ostringstream oss;
-        oss << "x=" << event.x << " y=" << event.y 
-            << " width=" << event.width << " height=" << event.height;
-        logEvent("ConfigureWindowEvent", event, oss.str());
+        // Skip logging window resize events to avoid spam
+        static int configCount = 0;
+        configCount++;
+        if (configCount % 100 == 0) {
+            std::ostringstream oss;
+            oss << "x=" << event.x << " y=" << event.y 
+                << " width=" << event.width << " height=" << event.height
+                << " (100 events)";
+            logEvent("ConfigureWindowEvent", event, oss.str());
+        }
     }
 
     void apply(vsg::CloseWindowEvent& event) override {

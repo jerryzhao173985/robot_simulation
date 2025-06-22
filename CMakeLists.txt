@@ -28,14 +28,14 @@ set(vsgXchange_DIR "/usr/local/lib/cmake/vsgXchange")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Try to find VSG first (optional but preferred)
+# Try to find VSG and vsgXchange
 find_package(vsg QUIET)
 find_package(vsgXchange QUIET)
 
 # If VSG is not available, use OpenGL/GLFW fallback
 if(NOT vsg_FOUND OR NOT vsgXchange_FOUND)
     message(STATUS "VSG not found, using OpenGL/GLFW fallback")
-    #set(USE_OPENGL_FALLBACK ON)  # always prefer VSG backend; fallback disabled by default
+    set(USE_OPENGL_FALLBACK ON)  # Enable OpenGL fallback when VSG not available
     
     # Find OpenGL and GLFW
     find_package(OpenGL REQUIRED)
@@ -133,7 +133,7 @@ endif()
 
 find_package(Threads REQUIRED)
 
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include ${ODE_INCLUDE_DIRS})
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/include ${CMAKE_CURRENT_SOURCE_DIR}/noise ${ODE_INCLUDE_DIRS})
 
 # Add library directories if specified
 if(ODE_LIBRARY_DIRS)
@@ -143,7 +143,9 @@ endif()
 add_executable(vsg_ode_robot
     src/main.cpp src/Robot.cpp src/PhysicsWorld.cpp
     src/RobotController.cpp src/Terrain.cpp src/Visualizer.cpp
-    src/InputHandler.cpp src/DebugOutput.cpp)
+    src/InputHandler.cpp src/DebugOutput.cpp
+    src/Sensor.cpp src/Actuator.cpp src/NoiseManager.cpp
+    noise/mac_drand48r.cpp)
 
 # Add physics test executable (commented out - file doesn't exist)
 # add_executable(test_physics

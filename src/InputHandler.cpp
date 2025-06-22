@@ -1,8 +1,12 @@
 #include "InputHandler.h"
+
+#ifndef USE_OPENGL_FALLBACK  // Only compile VSG version
 #include "RobotController.h"
 #include "Visualizer.h"
 #include "DebugOutput.h"
+#include "NoiseManager.h"
 #include <iostream>
+#include <iomanip>
 
 InputHandler::InputHandler(RobotController* controller, Visualizer* vis)
     : robotController(controller), visualizer(vis)
@@ -13,26 +17,14 @@ void InputHandler::apply(vsg::KeyPressEvent& keyPress)
 {
     auto key = keyPress.keyBase;
     
-    // Debug output for all key presses - using correct VSG enum names
-    std::cout << "[DEBUG] Key pressed: " << key << " (";
-    switch(key) {
-        case vsg::KEY_w: std::cout << "w"; break;
-        case vsg::KEY_a: std::cout << "a"; break;
-        case vsg::KEY_s: std::cout << "s"; break;
-        case vsg::KEY_d: std::cout << "d"; break;
-        case vsg::KEY_W: std::cout << "W"; break;
-        case vsg::KEY_A: std::cout << "A"; break;
-        case vsg::KEY_S: std::cout << "S"; break;
-        case vsg::KEY_D: std::cout << "D"; break;
-        case vsg::KEY_Space: std::cout << "Space"; break;
-        case vsg::KEY_Escape: std::cout << "Escape"; break;
-        case vsg::KEY_c: std::cout << "c"; break;
-        case vsg::KEY_C: std::cout << "C"; break;
-        case vsg::KEY_v: std::cout << "v"; break;
-        case vsg::KEY_V: std::cout << "V"; break;
-        default: std::cout << "Unknown"; break;
+    // Minimal debug output - only for unknown keys
+    if (key != vsg::KEY_w && key != vsg::KEY_a && key != vsg::KEY_s && key != vsg::KEY_d &&
+        key != vsg::KEY_W && key != vsg::KEY_A && key != vsg::KEY_S && key != vsg::KEY_D &&
+        key != vsg::KEY_Space && key != vsg::KEY_Escape && key != vsg::KEY_c && key != vsg::KEY_C &&
+        key != vsg::KEY_v && key != vsg::KEY_V && key != vsg::KEY_n && key != vsg::KEY_N &&
+        key != vsg::KEY_m && key != vsg::KEY_M) {
+        std::cout << "[InputHandler] Unknown key: " << key << std::endl;
     }
-    std::cout << ")" << std::endl;
     
     // Handle immediate key actions using correct VSG constants
     switch (key)
@@ -64,7 +56,6 @@ void InputHandler::apply(vsg::KeyPressEvent& keyPress)
         case vsg::KEY_D:
             // Movement keys - update immediately
             if (manualControlActive) {
-                std::cout << "[DEBUG] Movement key detected, updating movement" << std::endl;
                 keyPress.handled = true;
             }
             break;
@@ -78,6 +69,18 @@ void InputHandler::apply(vsg::KeyPressEvent& keyPress)
         case vsg::KEY_v:
         case vsg::KEY_V:
             handleDebugToggle();
+            keyPress.handled = true;
+            break;
+            
+        case vsg::KEY_n:
+        case vsg::KEY_N:
+            handleNoiseIncrease();
+            keyPress.handled = true;
+            break;
+            
+        case vsg::KEY_m:
+        case vsg::KEY_M:
+            handleNoiseDecrease();
             keyPress.handled = true;
             break;
             
@@ -102,9 +105,6 @@ void InputHandler::apply(vsg::KeyPressEvent& keyPress)
 void InputHandler::apply(vsg::KeyReleaseEvent& keyRelease)
 {
     auto key = keyRelease.keyBase;
-    
-    // Debug output
-    std::cout << "[DEBUG] Key released: " << key << std::endl;
     
     pressedKeys.erase(key);
     keyPressTime.erase(key);
@@ -170,12 +170,12 @@ void InputHandler::updateMovement()
         return;
     }
     
-    // Debug: show which keys are currently pressed
-    std::cout << "[DEBUG] updateMovement called. Pressed keys: ";
-    for (auto key : pressedKeys) {
-        std::cout << key << " ";
+    // Track key changes without debug output
+    static std::set<vsg::KeySymbol> lastPressedKeys;
+    bool keysChanged = (pressedKeys != lastPressedKeys);
+    if (keysChanged) {
+        lastPressedKeys = pressedKeys;
     }
-    std::cout << std::endl;
     
     // Calculate movement based on pressed keys
     vsg::vec3 movement(0.0f, 0.0f, 0.0f);
@@ -184,21 +184,17 @@ void InputHandler::updateMovement()
     // Forward/Backward - using correct VSG constants
     if (isKeyPressed(vsg::KEY_w) || isKeyPressed(vsg::KEY_W)) {
         movement.x += 1.0f;
-        std::cout << "[DEBUG] W pressed - moving forward" << std::endl;
     }
     if (isKeyPressed(vsg::KEY_s) || isKeyPressed(vsg::KEY_S)) {
         movement.x -= 1.0f;
-        std::cout << "[DEBUG] S pressed - moving backward" << std::endl;
     }
     
     // Left/Right turning - using correct VSG constants
     if (isKeyPressed(vsg::KEY_a) || isKeyPressed(vsg::KEY_A)) {
         rotation += 1.0f;
-        std::cout << "[DEBUG] A pressed - turning left" << std::endl;
     }
     if (isKeyPressed(vsg::KEY_d) || isKeyPressed(vsg::KEY_D)) {
         rotation -= 1.0f;
-        std::cout << "[DEBUG] D pressed - turning right" << std::endl;
     }
     
     // Apply speed modifiers
@@ -218,14 +214,10 @@ void InputHandler::updateMovement()
     currentMovement = movement;
     currentRotation = rotation * rotationSpeed;
     
-    // Debug output
-    std::cout << "[DEBUG] Movement: (" << movement.x << ", " << movement.y << ", " << movement.z << ") Rotation: " << rotation << std::endl;
-    
     // Send movement commands to robot controller
     if (robotController) {
         robotController->setManualVelocity(currentMovement);
         robotController->setManualRotation(currentRotation);
-        std::cout << "[DEBUG] Sent to controller - Velocity: (" << currentMovement.x << ", " << currentMovement.y << ", " << currentMovement.z << ") Rotation: " << currentRotation << std::endl;
     }
 }
 
@@ -237,27 +229,21 @@ void InputHandler::handleCameraSwitch()
     switch (cameraMode) {
         case 0:
             visualizer->setCameraMode(Visualizer::CameraMode::FOLLOW);
-            std::cout << "Camera mode: FOLLOW" << std::endl;
             break;
         case 1:
             visualizer->setCameraMode(Visualizer::CameraMode::FREE);
-            std::cout << "Camera mode: FREE" << std::endl;
             break;
         case 2:
             visualizer->setCameraMode(Visualizer::CameraMode::ORBIT);
-            std::cout << "Camera mode: ORBIT" << std::endl;
             break;
         case 3:
             visualizer->setCameraMode(Visualizer::CameraMode::TOP);
-            std::cout << "Camera mode: TOP" << std::endl;
             break;
         case 4:
             visualizer->setCameraMode(Visualizer::CameraMode::FRONT);
-            std::cout << "Camera mode: FRONT" << std::endl;
             break;
         case 5:
             visualizer->setCameraMode(Visualizer::CameraMode::SIDE);
-            std::cout << "Camera mode: SIDE" << std::endl;
             break;
     }
 }
@@ -271,30 +257,40 @@ void InputHandler::handleDebugToggle()
     switch (currentLevel) {
         case Debug::NONE:
             newLevel = Debug::ERROR;
-            std::cout << "\n[DEBUG] Level: ERROR - Only errors shown" << std::endl;
             break;
         case Debug::ERROR:
             newLevel = Debug::WARNING;
-            std::cout << "\n[DEBUG] Level: WARNING - Errors and warnings shown" << std::endl;
             break;
         case Debug::WARNING:
             newLevel = Debug::INFO;
-            std::cout << "\n[DEBUG] Level: INFO - Important information shown" << std::endl;
             break;
         case Debug::INFO:
             newLevel = Debug::VERBOSE;
-            std::cout << "\n[DEBUG] Level: VERBOSE - Detailed debug output" << std::endl;
             break;
         case Debug::VERBOSE:
             newLevel = Debug::ALL;
-            std::cout << "\n[DEBUG] Level: ALL - All debug output including physics" << std::endl;
             break;
         case Debug::ALL:
         default:
             newLevel = Debug::NONE;
-            std::cout << "\n[DEBUG] Level: NONE - Debug output disabled" << std::endl;
             break;
     }
     
     Debug::setLevel(newLevel);
 }
+
+void InputHandler::handleNoiseIncrease()
+{
+    NoiseManager::getInstance().increaseNoise();
+    float currentLevel = NoiseManager::getInstance().getNoiseLevel();
+    std::cout << "\033[1;33mNoise level increased to: " << std::fixed << std::setprecision(1) << currentLevel << "\033[0m" << std::endl;
+}
+
+void InputHandler::handleNoiseDecrease()
+{
+    NoiseManager::getInstance().decreaseNoise();
+    float currentLevel = NoiseManager::getInstance().getNoiseLevel();
+    std::cout << "\033[1;33mNoise level decreased to: " << std::fixed << std::setprecision(1) << currentLevel << "\033[0m" << std::endl;
+}
+
+#endif // USE_OPENGL_FALLBACK

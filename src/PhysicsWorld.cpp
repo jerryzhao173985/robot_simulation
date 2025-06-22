@@ -12,18 +12,25 @@ PhysicsWorld::PhysicsWorld() {
     
     // Set default parameters (use Z-up in sync with VSG)
     dWorldSetGravity(world, 0, 0, -9.81f);
-    dWorldSetERP(world, 0.9f);  // Very high error reduction
-    dWorldSetCFM(world, 1e-7);  // Extremely stiff world constraint
-    dWorldSetContactMaxCorrectingVel(world, 10.0f);  // Allow fast error correction
-    dWorldSetContactSurfaceLayer(world, 0.0f);  // No surface layer tolerance
+    dWorldSetERP(world, 0.8f);  // Higher error reduction for stiffer contacts
+    dWorldSetCFM(world, 1e-6);  // Stiffer constraint force mixing
+    dWorldSetMaxAngularSpeed(world, 10.0f);  // Limit angular speed
+    dWorldSetContactMaxCorrectingVel(world, 10.0f);  // Higher correcting velocity to prevent sinking
+    dWorldSetContactSurfaceLayer(world, 0.0001f);  // Smaller surface layer to prevent sinking
     dWorldSetAutoDisableFlag(world, 0);
-    dWorldSetQuickStepNumIterations(world, 100);  // Many iterations for stability
-    dWorldSetQuickStepW(world, 1.3);  // Over-relaxation for better convergence
+    dWorldSetQuickStepNumIterations(world, 20);  // Standard iteration count
+    dWorldSetQuickStepW(world, 1.3);  // Standard over-relaxation
     
-    // Create ground plane at Z=0
-    // Plane equation: ax + by + cz + d = 0
-    // For Z=0 plane pointing up: 0x + 0y + 1z + 0 = 0
-    groundPlane = dCreatePlane(space, 0, 0, 1, 0); // Ground at exactly Z=0
+    // Create a large box as ground instead of plane for better collision
+    // Box provides more reliable collision detection than infinite plane
+    groundPlane = dCreateBox(space, 100.0f, 100.0f, 1.0f);  // 100x100x1 meter box
+    dGeomSetPosition(groundPlane, 0, 0, -0.5f);  // Position so top is at Z=0
+    
+    // Make it completely immovable
+    dGeomSetCategoryBits(groundPlane, ~0);
+    dGeomSetCollideBits(groundPlane, ~0);
+    
+    std::cout << "[PhysicsWorld] Created ground box at Z=0 (100x100x1m)" << std::endl;
     
     // Initialize debug group
     debugGroup = vsg::Group::create();
@@ -98,78 +105,133 @@ void PhysicsWorld::nearCallback(void* data, dGeomID o1, dGeomID o2) {
 }
 
 void PhysicsWorld::handleCollision(dGeomID o1, dGeomID o2) {
+    // Debug counter
+    static int collisionCount = 0;
+    collisionCount++;
+    
     // Check if both geometries have bodies
     dBodyID b1 = dGeomGetBody(o1);
     dBodyID b2 = dGeomGetBody(o2);
     
-    // Exit if both bodies are connected by a joint
+    // Exit if both bodies exist and are connected by a joint (but not for ground!)
     if (b1 && b2 && dAreConnectedExcluding(b1, b2, dJointTypeContact)) {
         return;
     }
     
-    // Debug: Check if this is a ground collision with detailed info
-    static int frameCount = 0;
-    bool isGroundCollision = (o1 == groundPlane || o2 == groundPlane);
-    if (isGroundCollision && frameCount++ % 600 == 0) { // Reduced frequency: every 10 seconds at 60Hz
+    // Check if this is a ground collision (terrain or ground plane has no body)
+    bool isGroundCollision = (!b1 || !b2); // One geometry has no body = static/ground
+    
+    // Check if it's specifically the ground plane
+    bool isGroundPlane = (o1 == groundPlane || o2 == groundPlane);
+    
+    // Debug: Log collision checks with static geometry
+    if (collisionCount < 10 && isGroundCollision) {
+        dGeomID movingGeom = b1 ? o1 : o2;
+        int cls = dGeomGetClass(movingGeom);
+        std::cout << "[STATIC COLLISION] #" << collisionCount 
+                 << " - " << (cls == dBoxClass ? "Box" : 
+                            cls == dCapsuleClass ? "Capsule" : 
+                            cls == dTriMeshClass ? "TriMesh" : "Other") 
+                 << " hitting static geometry" << std::endl;
+    }
+    
+    // Debug: Log ground plane collisions with more detail
+    static int groundPlaneCollisions = 0;
+    if (isGroundPlane && groundPlaneCollisions < 50) {
+        groundPlaneCollisions++;
         dGeomID obj = (o1 == groundPlane) ? o2 : o1;
         const dReal* pos = dGeomGetPosition(obj);
+        dBodyID body = dGeomGetBody(obj);
         int geomClass = dGeomGetClass(obj);
         const char* className = (geomClass == dSphereClass) ? "Sphere" : 
                                (geomClass == dCapsuleClass) ? "Capsule" : 
                                (geomClass == dBoxClass) ? "Box" : "Other";
-        std::stringstream ss;
-        ss << "Ground contact: " << className << " at Z=" << pos[2];
-        DEBUG_PHYSICS(ss.str());
+        
+        // Check if it's a robot part
+        bool isRobotPart = (body != nullptr);
+        
+        std::cout << "[GROUND] #" << groundPlaneCollisions 
+                  << " " << className 
+                  << " at Z=" << pos[2] 
+                  << (isRobotPart ? " (ROBOT PART)" : " (static)")
+                  << std::endl;
     }
     
-    // Maximum number of contact points - reduced for better performance
-    // 32 is usually overkill, 8-16 is typically sufficient for most cases
-    const int maxContacts = 16;
-    dContact contact[maxContacts];
+    // Allow more contact points for ground plane to handle 6 feet
+    // Need at least 6 for hexapod, plus some extra
+    const int maxContacts = isGroundPlane ? 12 : 8;
+    dContact contact[16];  // Stack allocation size
     
     // Get contact points
     int numContacts = dCollide(o1, o2, maxContacts, &contact[0].geom, sizeof(dContact));
     
     if (numContacts > 0) {
-        // Log ground contacts for debugging - only log excessive contacts
-        if (isGroundCollision && numContacts > 20) { // Only log when there are many contacts
-            std::stringstream ss;
-            ss << "[WARNING] Creating " << numContacts << " contact joints for ground collision (excessive)";
-            DEBUG_PHYSICS(ss.str());
+        // Only log excessive contacts
+        static int excessiveContactCount = 0;
+        if (isGroundCollision && numContacts > 8 && excessiveContactCount < 10) {
+            excessiveContactCount++;
+            std::cout << "[WARNING] Excessive contacts: " << numContacts << " joints" << std::endl;
         }
         
         for (int i = 0; i < numContacts; ++i) {
             // Set contact parameters - extra stiff for ground contacts
-            if (isGroundCollision) {
-                // EXTREMELY stiff parameters for ground to prevent ANY sinking
-                contact[i].surface.mode = dContactSoftERP | dContactSoftCFM | dContactApprox1;
-                contact[i].surface.soft_cfm = 0.0f;     // Infinitely stiff
-                contact[i].surface.soft_erp = 1.0f;     // Maximum error correction
-                contact[i].surface.mu = dInfinity;      // Infinite friction
-                contact[i].surface.mu2 = dInfinity;     // Infinite friction
+            if (isGroundPlane) {
+                // Ground box - extremely stiff parameters to prevent sinking
+                contact[i].surface.mode = dContactBounce | dContactSoftCFM | dContactSoftERP | dContactApprox1;
+                contact[i].surface.mu = 2.0;            // High friction for better grip
+                contact[i].surface.mu2 = 2.0;
+                contact[i].surface.bounce = 0.0f;       // No bounce
+                contact[i].surface.bounce_vel = 0.1f;   // Minimum velocity for bounce
+                contact[i].surface.soft_cfm = 0.0;      // Infinitely stiff contact
+                contact[i].surface.soft_erp = 0.95;     // Very high error reduction for instant response
+            } else if (isGroundCollision) {
+                // Terrain or other static geometry
+                contact[i].surface.mode = dContactBounce | dContactSoftCFM;
+                contact[i].surface.mu = 1.0f;           // Reasonable friction
+                contact[i].surface.mu2 = 1.0f;
+                contact[i].surface.bounce = 0.0f;       // No bounce
+                contact[i].surface.bounce_vel = 0.1f;   // Minimum velocity for bounce
+                contact[i].surface.soft_cfm = 0.00001;  // Slightly soft for stability
             } else {
                 // Normal parameters for object-object contacts
-                contact[i].surface.mode = dContactBounce | dContactSoftCFM | dContactSoftERP | dContactApprox1 | dContactSlip1 | dContactSlip2;
-                contact[i].surface.slip1 = 0.0f;  // No slip
-                contact[i].surface.slip2 = 0.0f;  // No slip
-                contact[i].surface.mu = groundFriction * 2.0f;  // High friction
-                contact[i].surface.mu2 = groundFriction * 2.0f;
-                contact[i].surface.bounce = 0.01f;  // Very small bounce
-                contact[i].surface.bounce_vel = 0.1f;  // Threshold velocity
-                contact[i].surface.soft_cfm = 0.0f;  // Infinitely stiff (hard contact)
-                contact[i].surface.soft_erp = 0.95f;  // Very high error reduction
+                contact[i].surface.mode = dContactBounce | dContactSoftCFM;
+                contact[i].surface.mu = 0.5f;           // Moderate friction
+                contact[i].surface.mu2 = 0.5f;
+                contact[i].surface.bounce = 0.1f;       // Small bounce
+                contact[i].surface.bounce_vel = 0.1f;   // Threshold velocity
+                contact[i].surface.soft_cfm = 0.0001;   // Slightly soft for stability
             }
             
             // Create contact joint
             dJointID c = dJointCreateContact(world, contactGroup, &contact[i]);
-            // Attach bodies - handle case where ground has no body (static geometry)
-            // IMPORTANT: For ground contacts, ensure the dynamic body is always first
-            if (o1 == groundPlane) {
-                dJointAttach(c, b2, 0);  // Ground is static, attach dynamic body to world
-            } else if (o2 == groundPlane) {
-                dJointAttach(c, b1, 0);  // Ground is static, attach dynamic body to world
+            
+            // For ground plane, ensure proper attachment
+            if (isGroundPlane) {
+                dBodyID movingBody = b1 ? b1 : b2;
+                dJointAttach(c, movingBody, 0);  // Attach to world (0 = static world)
+                
+                // Debug first few ground contacts
+                static int groundContactCount = 0;
+                if (groundContactCount++ < 10) {
+                    std::cout << "[GROUND CONTACT] Created joint for body at Z=" 
+                              << contact[i].geom.pos[2] << " with depth=" 
+                              << contact[i].geom.depth << std::endl;
+                }
+            } else if (!b1) {
+                dJointAttach(c, b2, 0);  // First is static, attach second to world
+            } else if (!b2) {
+                dJointAttach(c, b1, 0);  // Second is static, attach first to world
             } else {
                 dJointAttach(c, b1, b2);  // Both dynamic
+            }
+            
+            // For ground plane contacts, ensure nothing goes below ground
+            if (isGroundPlane) {
+                // Force contact points to be at or above ground
+                if (contact[i].geom.pos[2] < 0.0) {
+                    contact[i].geom.pos[2] = 0.0;
+                    contact[i].geom.depth = std::max(contact[i].geom.depth, 0.01);
+                }
             }
             
             if (isGroundCollision && i == 0 && contact[i].geom.depth > 0.01f) { // Only log significant penetrations
@@ -199,6 +261,13 @@ void PhysicsWorld::handleCollision(dGeomID o1, dGeomID o2) {
 void PhysicsWorld::step(double deltaTime) {
     // Clear previous contacts
     activeContacts.clear();
+    
+    // Debug first few steps
+    static int stepDebugCount = 0;
+    if (stepDebugCount++ < 5) {
+        std::cout << "[PHYSICS] Step " << stepDebugCount << " - deltaTime=" << deltaTime << std::endl;
+        std::cout.flush();
+    }
     
     if (adaptiveStepping) {
         // Adaptive time stepping
@@ -231,19 +300,23 @@ void PhysicsWorld::step(double deltaTime) {
     updateTransforms();
 }
 
+void PhysicsWorld::emergencyGroundClamping() {
+    // Disabled - let physics handle collisions naturally
+    // This function was causing artificial behavior
+}
+
 void PhysicsWorld::updateTransforms() {
     for (auto& obj : objects) {
         if (obj.body && obj.transform) {
             const dReal* pos = dBodyGetPosition(obj.body);
             const dReal* rot = dBodyGetRotation(obj.body);
             
-            vsg::dmat4 matrix;
-            matrix[0][0] = rot[0]; matrix[0][1] = rot[1]; matrix[0][2] = rot[2]; matrix[0][3] = 0;
-            matrix[1][0] = rot[4]; matrix[1][1] = rot[5]; matrix[1][2] = rot[6]; matrix[1][3] = 0;
-            matrix[2][0] = rot[8]; matrix[2][1] = rot[9]; matrix[2][2] = rot[10]; matrix[2][3] = 0;
-            matrix[3][0] = pos[0]; matrix[3][1] = pos[1]; matrix[3][2] = pos[2]; matrix[3][3] = 1;
-            
-            obj.transform->matrix = matrix;
+            // Copy transform data to matrix
+            // VSG uses column-major matrices, access with (row, col)
+            obj.transform->matrix(0, 0) = rot[0]; obj.transform->matrix(0, 1) = rot[1]; obj.transform->matrix(0, 2) = rot[2]; obj.transform->matrix(0, 3) = 0;
+            obj.transform->matrix(1, 0) = rot[4]; obj.transform->matrix(1, 1) = rot[5]; obj.transform->matrix(1, 2) = rot[6]; obj.transform->matrix(1, 3) = 0;
+            obj.transform->matrix(2, 0) = rot[8]; obj.transform->matrix(2, 1) = rot[9]; obj.transform->matrix(2, 2) = rot[10]; obj.transform->matrix(2, 3) = 0;
+            obj.transform->matrix(3, 0) = pos[0]; obj.transform->matrix(3, 1) = pos[1]; obj.transform->matrix(3, 2) = pos[2]; obj.transform->matrix(3, 3) = 1;
         }
     }
 }

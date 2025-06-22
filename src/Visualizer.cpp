@@ -1,5 +1,7 @@
 #include "Visualizer.h"
 #include "VisualizerHexapodConfig.h"
+#include "DebugOutput.h"
+#include "NoiseManager.h"
 #include <iostream>
 #include <sstream>
 #include <iomanip>
@@ -143,9 +145,17 @@ bool Visualizer::initialize() {
         }
         
         // Create window
+        // macOS requires forward compatibility for OpenGL 3.2+
+#ifdef __APPLE__
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
+        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
+        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);
+        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
+#else
         glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
         glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
         glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_COMPAT_PROFILE);
+#endif
         
         window = glfwCreateWindow(windowWidth, windowHeight, "Robot Simulation (OpenGL)", nullptr, nullptr);
         if (!window) {
@@ -222,9 +232,7 @@ bool Visualizer::initialize() {
         windowTraits->samples = msaaSamples;
         windowTraits->fullscreen = false;
         
-        // Debug print traits
-        std::cout << "[Visualizer] Window traits: " << windowWidth << "x" << windowHeight 
-                  << " samples=" << msaaSamples << std::endl;
+        // Window traits configured
         
         // 3. Create window
         window = vsg::Window::create(windowTraits);
@@ -337,7 +345,19 @@ void Visualizer::render() {
 #endif
     
     // Frame
-    if (viewer->advanceToNextFrame()) {
+    static int debugFrameCount = 0;
+    static auto lastDebugTime = std::chrono::high_resolution_clock::now();
+    
+    auto beforeAdvance = std::chrono::high_resolution_clock::now();
+    bool advanced = viewer->advanceToNextFrame();
+    auto afterAdvance = std::chrono::high_resolution_clock::now();
+    
+    double advanceTime = std::chrono::duration<double>(afterAdvance - beforeAdvance).count();
+    if (advanceTime > 0.1) {  // Log if it takes more than 100ms
+        std::cout << "[VSG] advanceToNextFrame took " << advanceTime << "s" << std::endl;
+    }
+    
+    if (advanced) {
         viewer->handleEvents();
         
         // IMPORTANT: viewer->update() must be called AFTER all transforms are updated
@@ -346,6 +366,15 @@ void Visualizer::render() {
         
         viewer->recordAndSubmit();
         viewer->present();
+        
+        debugFrameCount++;
+        if (debugFrameCount % 10 == 0) {
+            auto now = std::chrono::high_resolution_clock::now();
+            double elapsed = std::chrono::duration<double>(now - lastDebugTime).count();
+            std::cout << "[VSG RENDER] " << debugFrameCount << " frames, " 
+                      << (10.0/elapsed) << " FPS" << std::endl;
+            lastDebugTime = now;
+        }
     } else {
         static bool warnedOnce = false;
         if (!warnedOnce) {
@@ -361,17 +390,7 @@ bool Visualizer::shouldClose() const {
 #ifdef USE_OPENGL_FALLBACK
     return glfwWindowShouldClose(window);
 #else
-    bool active = viewer->active();
-    static bool firstCheck = true;
-    if (firstCheck) {
-        std::cout << "[Visualizer::shouldClose] First check - viewer->active() = " << active << std::endl;
-        if (window) {
-            std::cout << "[Visualizer::shouldClose] Window valid = true" << std::endl;
-            std::cout << "[Visualizer::shouldClose] Window visible = " << window->visible() << std::endl;
-        }
-        firstCheck = false;
-    }
-    return !active;
+    return !viewer->active();
 #endif
 }
 
@@ -391,10 +410,6 @@ void Visualizer::close() {
 void Visualizer::addEventHandler(vsg::ref_ptr<vsg::Visitor> handler) {
     if (viewer && handler) {
         viewer->addEventHandler(handler);
-        std::cout << "[Visualizer] Added event handler: " << handler << std::endl;
-        std::cout << "[Visualizer] Total event handlers: " << viewer->getEventHandlers().size() << std::endl;
-    } else {
-        std::cout << "[Visualizer] ERROR: Cannot add event handler - viewer=" << viewer << " handler=" << handler << std::endl;
     }
 }
 #endif
@@ -582,7 +597,7 @@ void Visualizer::updateCamera() {
     // Fallback free-camera controls (arrow keys + +/- zoom)
 #ifdef USE_OPENGL_FALLBACK
     // Free-camera controls only in fallback mode
-    if (cameraMode == 0) {
+    if (currentCameraMode == CameraMode::FREE) {
         const float azStep = 0.02f;
         const float elStep = 0.02f;
         const float zoomStep = 0.2f;
@@ -677,7 +692,7 @@ void Visualizer::updateCamera() {
     // "free" mode uses trackball and doesn't update automatically
 #else
     // Follow mode
-    if (cameraMode == 1) {
+    if (currentCameraMode == CameraMode::FOLLOW) {
         vsg_vec3 offset(
             -camera.followDistance * cos(frameTime * 0.1f),
             -camera.followDistance * sin(frameTime * 0.1f),
@@ -688,7 +703,7 @@ void Visualizer::updateCamera() {
     }
     
     // Orbit mode  
-    else if (cameraMode == 2) {
+    else if (currentCameraMode == CameraMode::ORBIT) {
         float angle = frameTime * 0.2f;
         vsg_vec3 diff = camera.position - camera.target;
         float radius = diff.length();
@@ -1098,7 +1113,7 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
     vsg::GeometryInfo geomInfo;
     vsg::StateInfo stateInfo;
     
-    geomInfo.position.set(0.0f, 0.0f, -0.01f);     // slightly below Z=0
+    geomInfo.position.set(0.0f, 0.0f, 0.0f);       // exactly at Z=0 to match physics
     geomInfo.dx.set(50.0f, 0.0f, 0.0f);            // X extent - increased from 10
     geomInfo.dy.set(0.0f, 50.0f, 0.0f);            // Y extent - increased from 10
     geomInfo.color = vsg::vec4(0.7f, 0.7f, 0.7f, 1.0f); // Light gray
@@ -1151,31 +1166,12 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
     geomInfo.transform = vsg::dmat4();
 
     // ------------------------------
-    // Hexapod legs - proper 3-segment design with natural angles
+    // Dynamic legs will be added by Robot class
     // ------------------------------
-    // Using leg dimensions already defined above for consistency
-    const double segmentRadius = 0.04;  // consistent segment thickness
-
-    // Define leg and joint colors
-    const auto legColor   = vsg::vec4(0.2f, 0.2f, 0.2f, 1.0f);
-    const auto jointColor = vsg::vec4(0.15f, 0.15f, 0.15f, 1.0f);
-
-    // Material states (lighting enabled, wireframe off)
-    vsg::StateInfo legState;
-    legState.lighting  = true;
-    legState.wireframe = false;
-
-    vsg::StateInfo jointState;
-    jointState.lighting  = true;
-    jointState.wireframe = false;
+    // Legs are now created dynamically by the Robot class
+    // and will be synchronized with physics simulation
     
-    // Leg attachment points - 3 pairs along body sides
-    std::vector<double> legXPositions = { 
-        -bodyLength * 0.3,   // front legs
-         0.0,                // middle legs  
-         bodyLength * 0.3    // rear legs
-    };
-    
+    /* Static leg creation removed - legs are now dynamic
     for (int legPair = 0; legPair < 3; ++legPair)
     {
         double legX = legXPositions[legPair];
@@ -1381,8 +1377,9 @@ vsg::ref_ptr<vsg::Group> Visualizer::createScene(vsg::ref_ptr<vsg::Options> opti
 #endif
         }
     }
+    */
     
-    // Add the complete robot (body + legs) to the scene
+    // Add the robot body transform to the scene (legs will be added dynamically)
     scene->addChild(robotTransform);
     
     // NOTE: Architectural Issue - Visual-Physics Transform Sync
@@ -1623,18 +1620,18 @@ void Visualizer::createTextOverlay() {
     // Create text group for overlay
     textGroup = vsg::Group::create();
     
-    // Create stats text with transform for positioning
+    // Create stats text with transform for positioning (top-right)
     {
         statsTransform = vsg::MatrixTransform::create();
-        statsTransform->matrix = vsg::translate(vsg::dvec3(20.0, 20.0, 0.0));
+        statsTransform->matrix = vsg::translate(vsg::dvec3(windowWidth - 280.0, 20.0, 0.0));
         
         auto layout = vsg::StandardLayout::create();
         layout->position = vsg::vec3(0.0f, 0.0f, 0.0f);
-        layout->horizontal = vsg::vec3(16.0f, 0.0f, 0.0f);
-        layout->vertical = vsg::vec3(0.0f, 20.0f, 0.0f);
-        layout->color = vsg::vec4(1.0f, 1.0f, 1.0f, 0.95f);
-        layout->outlineWidth = 0.15f;
-        layout->outlineColor = vsg::vec4(0.0f, 0.0f, 0.0f, 1.0f);
+        layout->horizontal = vsg::vec3(14.0f, 0.0f, 0.0f);
+        layout->vertical = vsg::vec3(0.0f, 18.0f, 0.0f);
+        layout->color = vsg::vec4(0.9f, 0.9f, 0.9f, 0.85f);
+        layout->outlineWidth = 0.2f;
+        layout->outlineColor = vsg::vec4(0.1f, 0.1f, 0.1f, 0.8f);
         
         statsText = vsg::Text::create();
         statsText->text = vsg::stringValue::create("Initializing...");
@@ -1669,6 +1666,8 @@ void Visualizer::createTextOverlay() {
             "Shift - Sprint\n"
             "Space - Manual control\n"
             "C - Camera mode\n"
+            "V - Debug verbosity\n"
+            "N/M - Increase/Decrease noise\n"
             "H - Toggle help\n"
             "1/2/3 - AI modes\n"
             "R - Reset robot\n"
@@ -1691,10 +1690,15 @@ void Visualizer::createTextOverlay() {
     
     // Add text group to scene
     scene->addChild(textGroup);
+    
+    // Make stats visible by default
+    statsVisible = true;
 }
 
 void Visualizer::updateStatsText(float fps, float frameTime, const vsg_vec3& robotPos, 
-                                const vsg_vec3& robotVel, bool stable, const std::string& controlMode) {
+                                const vsg_vec3& robotVel, bool stable, const std::string& controlMode,
+                                const vsg_vec3& moveCommand, float rotCommand,
+                                int footContacts, const vsg_vec3& angularVelocity, float avgJointVel) {
     if (!statsText || !statsText->text) return;
     
     if (auto text_string = statsText->text.cast<vsg::stringValue>()) {
@@ -1702,11 +1706,57 @@ void Visualizer::updateStatsText(float fps, float frameTime, const vsg_vec3& rob
         ss << std::fixed << std::setprecision(1);
         ss << "=== ROBOT STATUS ===" << std::endl;
         ss << "FPS: " << fps << " (" << frameTime << "ms)" << std::endl;
+        ss << std::endl;
+        
         ss << "Position: (" << robotPos.x << ", " << robotPos.y << ", " << robotPos.z << ")" << std::endl;
         ss << "Velocity: " << vsg::length(robotVel) << " m/s" << std::endl;
         ss << "Stable: " << (stable ? "YES" : "NO") << std::endl;
-        ss << "Mode: " << controlMode << std::endl;
+        ss << std::endl;
+        
+        ss << "Control: " << controlMode << std::endl;
+        if (controlMode.find("MANUAL") != std::string::npos) {
+            ss << "Move Cmd: ";
+            if (moveCommand.x != 0 || moveCommand.y != 0 || rotCommand != 0) {
+                ss << "Fwd=" << moveCommand.x << " Turn=" << rotCommand;
+            } else {
+                ss << "None";
+            }
+            ss << std::endl;
+        }
+        ss << std::endl;
+        
+        ss << "=== SENSORS ===" << std::endl;
+        ss << "Foot Contacts: " << footContacts << "/6" << std::endl;
+        
+        // Add ground collision warning
+        if (robotPos.z < 0.2f) {
+            ss << "*** GROUND COLLISION ***" << std::endl;
+            ss << "Body Height: " << robotPos.z << "m (TOO LOW!)" << std::endl;
+        }
+        
+        ss << "Angular Vel: (" << std::setprecision(2) 
+           << angularVelocity.x << ", " << angularVelocity.y << ", " << angularVelocity.z << ")" << std::endl;
+        ss << "Avg Joint Vel: " << avgJointVel << " rad/s" << std::endl;
+        ss << std::endl;
+        
+        ss << std::setprecision(1);  // Reset precision
         ss << "Camera: " << getCameraModeString() << std::endl;
+        
+        // Add debug level
+        std::string debugLevel = "NONE";
+        switch(Debug::currentLevel) {
+            case Debug::NONE: debugLevel = "NONE"; break;
+            case Debug::ERROR: debugLevel = "ERROR"; break;
+            case Debug::WARNING: debugLevel = "WARNING"; break;
+            case Debug::INFO: debugLevel = "INFO"; break;
+            case Debug::VERBOSE: debugLevel = "VERBOSE"; break;
+            case Debug::ALL: debugLevel = "ALL"; break;
+        }
+        ss << "Debug: " << debugLevel << std::endl;
+        
+        // Add noise level
+        float noiseLevel = NoiseManager::getInstance().getNoiseLevel();
+        ss << "Noise Level: " << std::fixed << std::setprecision(1) << noiseLevel << std::endl;
         
         text_string->value() = ss.str();
         statsText->setup();
@@ -1752,7 +1802,34 @@ std::string Visualizer::getCameraModeString() const {
 #else
 // Stub implementations for OpenGL fallback
 void Visualizer::createTextOverlay() {}
-// Text overlay methods are implemented in createTextOverlay, updateStatsText, and updateControlsText
+
+void Visualizer::updateStatsText(float fps, float frameTime, const vsg_vec3& robotPos, 
+                                 const vsg_vec3& robotVel, bool manualControl, 
+                                 const std::string& controlMode, const vsg_vec3& cameraPos, 
+                                 float renderTime, int triangleCount, const vsg_vec3& lightDir, 
+                                 float noiseLevel) {
+    // Text overlay not implemented in OpenGL fallback
+}
+
+void Visualizer::updateControlsText(bool visible) {
+    // Text overlay not implemented in OpenGL fallback
+}
+
+void Visualizer::setTextVisible(bool stats, bool controls) {
+    // Text overlay not implemented in OpenGL fallback
+}
+
+std::string Visualizer::getCameraModeString() const {
+    switch (currentCameraMode) {
+        case CameraMode::FOLLOW: return "Follow";
+        case CameraMode::FREE: return "Free";
+        case CameraMode::ORBIT: return "Orbit";
+        case CameraMode::TOP: return "Top";
+        case CameraMode::FRONT: return "Front";
+        case CameraMode::SIDE: return "Side";
+        default: return "Unknown";
+    }
+}
 #endif
 
 void Visualizer::addSkybox(const std::string& skyboxPath) {

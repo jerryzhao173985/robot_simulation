@@ -8,6 +8,7 @@
 #include <iostream>
 #include <sstream>
 #include <cmath>
+#include <iomanip>
 
 // Debug control - now controlled by DebugOutput.h
 // #define DEBUG_ROBOT_INIT
@@ -35,10 +36,16 @@ Robot::Robot(dWorldID world, dSpaceID space,
     createBody();
     createLegs();
     
-    // Create collision geometry
+    // Create collision geometry with offset to ensure ground clearance
     dGeomID geom = dCreateBox(space, config.bodySize.x, config.bodySize.y, config.bodySize.z);
     dGeomSetBody(geom, bodyId);
+    // Offset the collision box upward to prevent body-ground collision
+    dGeomSetOffsetPosition(geom, 0, 0, 0.1f);  // Raise collision box
     bodyGeom = geom;
+    
+    // Set collision categories for body
+    dGeomSetCategoryBits(bodyGeom, 2);  // Body category
+    dGeomSetCollideBits(bodyGeom, ~0);  // Collide with everything
     
     // Initialize sensors and actuators
     createSensors();
@@ -81,13 +88,13 @@ Robot::~Robot() {
 }
 
 void Robot::createBody() {
-    // Create main body mass
+    // Create main body mass - moderate weight for proper physics
     dMass mass;
-    dMassSetBoxTotal(&mass, 10.0f, config.bodySize.x, config.bodySize.y, config.bodySize.z); // Increased mass for stability
+    dMassSetBoxTotal(&mass, 3.0f, config.bodySize.x, config.bodySize.y, config.bodySize.z); // Lighter for better support
     dBodySetMass(bodyId, &mass);
     // Add stronger damping to prevent oscillations and sinking
-    dBodySetLinearDamping(bodyId, 0.01f);   // Small linear damping
-    dBodySetAngularDamping(bodyId, 0.5f);   // Higher angular damping for stability
+    dBodySetLinearDamping(bodyId, 0.05f);   // More damping to prevent bouncing
+    dBodySetAngularDamping(bodyId, 0.3f);   // Good angular damping
     
     // Disable auto-disable to keep robot always active
     dBodySetAutoDisableFlag(bodyId, 0);
@@ -107,12 +114,17 @@ void Robot::createBody() {
 #endif
     }
     
-    // Set initial height to place feet just above ground level
-    // Physics feet are at Z=0.339559 when body is at 0.95
-    // So to put feet at ground (Z=0), body should be at 0.95 - 0.339559 = 0.610441
-    // Start much higher to ensure clean settling without penetration
-    float initZ = 1.0f; // This places feet well above ground for safe settling
+    // Set initial height for natural standing
+    // Total leg reach is approximately coxa + femur + tibia = 0.25 + 0.35 + 0.4 = 1.0m
+    // But legs are angled, so effective reach is about 0.6-0.7m when in standing pose
+    // Body height is 0.3m, body half-height is 0.15m
+    // Start robot well above ground to test settling
+    // Body height is 0.3m, so center at 0.5m means bottom at 0.35m
+    float initZ = 1.0f;  // Start high and let it settle
     dBodySetPosition(bodyId, 0.0f, 0.0f, initZ);
+    
+    // Set maximum velocity to prevent too fast falling
+    dBodySetMaxAngularSpeed(bodyId, 10.0f);
     
     // No initial velocity - let robot settle naturally
     dBodySetLinearVel(bodyId, 0.0f, 0.0f, 0.0f);
@@ -153,11 +165,11 @@ void Robot::createLegs() {
         int legPair = i / 2;  // 0, 1, 2 for front, middle, rear
         int side = (i % 2 == 0) ? -1 : 1;  // left (-1), right (+1)
         
-        // Match visual model angles for proper ground contact
+        // Adjusted angles for proper standing height
         const double maxAngle = M_PI / 2.0; // 90 degrees
-        const double coxaAngle = side * (70.0 * M_PI / 180.0);  // 70° outward - match visual
-        const double femurDownAngle = 20.0 * M_PI / 180.0;      // 20° downward - match visual
-        const double tibiaDownAngle = 65.0 * M_PI / 180.0;      // 65° total angle to match visual
+        const double coxaAngle = side * (30.0 * M_PI / 180.0);  // 30° outward - more vertical
+        const double femurDownAngle = 45.0 * M_PI / 180.0;      // 45° downward for good reach
+        const double tibiaDownAngle = 60.0 * M_PI / 180.0;      // 60° down - nearly vertical
         
         // Bounds checking for angle calculations
         if (std::abs(coxaAngle) > maxAngle || femurDownAngle > maxAngle || tibiaDownAngle > maxAngle) {
@@ -173,8 +185,8 @@ void Robot::createLegs() {
         dMass coxaMass;
         dMassSetCapsuleTotal(&coxaMass, 0.2f, 3, config.legRadius, config.coxaLength);
         dBodySetMass(coxaBody, &coxaMass);
-        dBodySetLinearDamping(coxaBody, 0.001f);    // Very light linear damping
-        dBodySetAngularDamping(coxaBody, 0.1f);     // Light angular damping
+        dBodySetLinearDamping(coxaBody, 0.01f);     // Light linear damping
+        dBodySetAngularDamping(coxaBody, 0.05f);    // Very light angular damping
         dBodySetAutoDisableFlag(coxaBody, 0);       // Keep leg segments always active
         
         // Position coxa extending outward from body with slight upward angle
@@ -200,7 +212,8 @@ void Robot::createLegs() {
         // Create coxa geometry
         dGeomID coxaGeom = dCreateCapsule(space, config.legRadius, config.coxaLength);
         dGeomSetBody(coxaGeom, coxaBody);
-        // No offset rotation - body orientation handles segment alignment
+        dGeomSetCategoryBits(coxaGeom, 1);
+        dGeomSetCollideBits(coxaGeom, ~0);
         
         // Hip joint (ball joint connecting coxa to body)
         dJointID hipJoint = dJointCreateBall(world, 0);
@@ -218,8 +231,8 @@ void Robot::createLegs() {
         dMass femurMass;
         dMassSetCapsuleTotal(&femurMass, 0.15f, 3, config.legRadius, config.femurLength);
         dBodySetMass(femurBody, &femurMass);
-        dBodySetLinearDamping(femurBody, 0.001f);   // Very light linear damping
-        dBodySetAngularDamping(femurBody, 0.1f);    // Light angular damping
+        dBodySetLinearDamping(femurBody, 0.01f);    // Light linear damping
+        dBodySetAngularDamping(femurBody, 0.05f);   // Very light angular damping
         dBodySetAutoDisableFlag(femurBody, 0);      // Keep leg segments always active
         
         // Position femur angled downward from coxa end with validated mathematics
@@ -248,6 +261,8 @@ void Robot::createLegs() {
         // Create femur geometry with proper orientation
         dGeomID femurGeom = dCreateCapsule(space, config.legRadius, config.femurLength);
         dGeomSetBody(femurGeom, femurBody);
+        dGeomSetCategoryBits(femurGeom, 1);
+        dGeomSetCollideBits(femurGeom, ~0);
         // Rotate capsule to align along segment
         dMatrix3 femurR;
         double femurAngle = atan2(femurMidZ - coxaEndWorldZ, 
@@ -275,8 +290,8 @@ void Robot::createLegs() {
         dMass tibiaMass;
         dMassSetCapsuleTotal(&tibiaMass, 0.1f, 3, config.legRadius, config.tibiaLength);
         dBodySetMass(tibiaBody, &tibiaMass);
-        dBodySetLinearDamping(tibiaBody, 0.001f);   // Very light linear damping
-        dBodySetAngularDamping(tibiaBody, 0.1f);    // Light angular damping
+        dBodySetLinearDamping(tibiaBody, 0.01f);    // Light linear damping
+        dBodySetAngularDamping(tibiaBody, 0.05f);   // Very light angular damping
         dBodySetAutoDisableFlag(tibiaBody, 0);      // Keep leg segments always active
         
         // Position tibia angled further downward to reach ground with validation
@@ -311,6 +326,8 @@ void Robot::createLegs() {
         // Create tibia geometry with proper orientation
         dGeomID tibiaGeom = dCreateCapsule(space, config.legRadius, config.tibiaLength);
         dGeomSetBody(tibiaGeom, tibiaBody);
+        dGeomSetCategoryBits(tibiaGeom, 1);
+        dGeomSetCollideBits(tibiaGeom, ~0);
         // Rotate capsule to align along segment
         dMatrix3 tibiaR;
         double tibiaAngle = atan2(tibiaMidZ - femurEndZ,
@@ -318,12 +335,17 @@ void Robot::createLegs() {
         dRFromAxisAndAngle(tibiaR, 0, 1, 0, M_PI/2 - tibiaAngle);
         dGeomSetOffsetRotation(tibiaGeom, tibiaR);
         
-        // Add foot box for absolutely reliable ground contact
-        float footSize = config.legRadius * 8.0f;  // Increased from 6x to 8x for better stability
-        dGeomID footGeom = dCreateBox(space, footSize, footSize, footSize);
+        // Add foot sphere for reliable ground contact
+        // Larger foot for better stability and ground contact
+        float footRadius = 0.05f;  // Fixed 5cm radius foot for all legs
+        dGeomID footGeom = dCreateSphere(space, footRadius);
         dGeomSetBody(footGeom, tibiaBody);
-        // Position at foot end
+        // Position foot at tibia end - sphere bottom should touch ground when leg is extended
         dGeomSetOffsetPosition(footGeom, 0, 0, -config.tibiaLength * 0.5f);
+        
+        // Set collision categories to ensure foot collides with ground
+        dGeomSetCategoryBits(footGeom, 1);  // Robot parts category
+        dGeomSetCollideBits(footGeom, ~0);  // Collide with everything
         
         // Ankle joint (hinge joint connecting tibia to femur)
         dJointID ankleJoint = dJointCreateHinge(world, 0);
@@ -352,6 +374,9 @@ void Robot::createLegs() {
 
     // Re-enable body now that legs are attached
     dBodyEnable(bodyId);
+    
+    // Set default standing pose
+    setDefaultStandingPose();
 }
 
 vsg_vec3 Robot::getLegPosition(int legIndex) const {
@@ -384,7 +409,7 @@ vsg_vec3 Robot::getLegPosition(int legIndex) const {
     
     double rootX = legXPositions[legPair];
     double rootY = side * (bodyWidth * 0.5);  // exactly at body edge
-    double rootZ = -bodyHeight * 0.5;         // attach legs at body bottom
+    double rootZ = -bodyHeight * 0.2;         // attach legs slightly below center
     
     return vsg_vec3(rootX, rootY, rootZ);
 }
@@ -397,6 +422,35 @@ void Robot::update(double deltaTime) {
     updateLegPositions();
     applyForces();
     maintainBalance();
+    
+    // Prevent sinking - apply strong upward force if too low
+    const dReal* pos = dBodyGetPosition(bodyId);
+    float minHeight = 0.6f;  // Increased to ensure feet clear ground
+    if (pos[2] < minHeight) {
+        // Strong corrective force to prevent sinking
+        float upwardForce = (minHeight - pos[2]) * 5000.0f;  // Much stronger force
+        dBodyAddForce(bodyId, 0, 0, upwardForce);
+        
+        // Also directly adjust position if critically low
+        if (pos[2] < 0.4f) {
+            dBodySetPosition(bodyId, pos[0], pos[1], 0.6f);
+            const dReal* vel = dBodyGetLinearVel(bodyId);
+            dBodySetLinearVel(bodyId, vel[0], vel[1], 0.0f);  // Stop downward velocity
+        }
+    }
+    
+    // Hard floor constraint - never allow body below minimum height
+    // With 0.3m body height and 0.05m foot radius, ensure feet don't penetrate ground
+    const float absoluteMinHeight = 0.55f;  // Raised to ensure feet clear the ground
+    if (pos[2] < absoluteMinHeight) {
+        // Force position up
+        dBodySetPosition(bodyId, pos[0], pos[1], absoluteMinHeight);
+        // Zero out any downward velocity
+        const dReal* vel = dBodyGetLinearVel(bodyId);
+        if (vel[2] < 0) {
+            dBodySetLinearVel(bodyId, vel[0], vel[1], 0.0f);
+        }
+    }
     
     // Update all sensors
     updateSensors(deltaTime);
@@ -425,42 +479,42 @@ void Robot::update(double deltaTime) {
 
 void Robot::updateLegPositions() {
     // Update all leg segment visuals to match their ODE body transforms
-    // Performance optimization: skip update if robot hasn't moved significantly
 #ifndef USE_OPENGL_FALLBACK
-    if (!robotTransform) return;
-    
-    static vsg::dvec3 lastBodyPos;
-    const dReal* bodyPos = dBodyGetPosition(bodyId);
-    vsg::dvec3 currentPos(bodyPos[0], bodyPos[1], bodyPos[2]);
-    if (vsg::length(currentPos - lastBodyPos) < 0.001) return;
-    lastBodyPos = currentPos;
+    if (!robotTransform || legNodes.empty()) return;
     
     // Get body transform for relative positioning
+    const dReal* bodyPos = dBodyGetPosition(bodyId);
     const dReal* bodyQ = dBodyGetQuaternion(bodyId);
     
-    vsg::dquat invBodyQ(-bodyQ[1], -bodyQ[2], -bodyQ[3], bodyQ[0]); // Inverse body rotation
+    // Create inverse body transform to convert world coords to body-local coords
+    vsg::dvec3 bodyPosition(bodyPos[0], bodyPos[1], bodyPos[2]);
+    vsg::dquat bodyOrientation(bodyQ[1], bodyQ[2], bodyQ[3], bodyQ[0]);
+    vsg::dquat invBodyQ = vsg::inverse(bodyOrientation);
     
     int segmentIndex = 0;
     for (int legIdx = 0; legIdx < NUM_LEGS; ++legIdx) {
         for (size_t segIdx = 0; segIdx < legs[legIdx].segments.size(); ++segIdx, ++segmentIndex) {
             auto& segment = legs[legIdx].segments[segIdx];
             
-            if (segmentIndex < legNodes.size() && legNodes[segmentIndex]) {
-                // Get segment world transform
+            if (segment.body && segmentIndex < legNodes.size() && legNodes[segmentIndex]) {
+                // Get segment world transform from physics
                 const dReal* segPos = dBodyGetPosition(segment.body);
                 const dReal* segQ = dBodyGetQuaternion(segment.body);
                 
-                // Convert to local coordinates relative to robot body
-                double localX = segPos[0] - bodyPos[0];
-                double localY = segPos[1] - bodyPos[1];
-                double localZ = segPos[2] - bodyPos[2];
+                // Convert to body-local coordinates
+                vsg::dvec3 segWorldPos(segPos[0], segPos[1], segPos[2]);
+                vsg::dvec3 localPos = segWorldPos - bodyPosition;
                 
+                // Rotate into body-local space
+                localPos = invBodyQ * localPos;
+                
+                // Convert segment orientation to body-local space
                 vsg::dquat segOrientation(segQ[1], segQ[2], segQ[3], segQ[0]);
                 vsg::dquat localOrientation = invBodyQ * segOrientation;
                 
-                // Update leg segment visual transform
+                // Update leg segment visual transform (relative to robot body)
                 legNodes[segmentIndex]->matrix = 
-                    vsg::translate(localX, localY, localZ) * vsg::rotate(localOrientation);
+                    vsg::translate(localPos) * vsg::rotate(localOrientation);
             }
         }
     }
@@ -595,9 +649,9 @@ void Robot::adjustLegsForBalance(float rollError, float pitchError) {
 }
 
 void Robot::reset() {
-    // Reset with proper Z-up positioning
-    float totalLegLength = config.coxaLength + config.femurLength + config.tibiaLength;
-    float resetZ = config.bodySize.z * 0.5f + totalLegLength * 0.8f;
+    // Reset with proper Z-up positioning to ensure feet don't penetrate ground
+    // Minimum height of 0.6m ensures body at 0.55m and feet clear ground
+    float resetZ = 0.6f;
     
     dBodySetPosition(bodyId, 0, 0, resetZ);
     dBodySetLinearVel(bodyId, 0, 0, 0);
@@ -614,6 +668,54 @@ void Robot::reset() {
 #ifdef DEBUG_ROBOT_INIT
     std::cout << "🔄 Robot reset to Z=" << resetZ << " with proper leg reach" << std::endl;
 #endif
+}
+
+void Robot::setDefaultStandingPose() {
+    // Set default standing pose with all 6 legs properly positioned
+    // This ensures all feet make ground contact at startup
+    
+    // Force robot to proper standing height
+    const dReal* pos = dBodyGetPosition(bodyId);
+    dBodySetPosition(bodyId, pos[0], pos[1], 0.6f);  // Higher initial standing pose
+    
+    // For each leg, set appropriate joint angles
+    for (int i = 0; i < NUM_LEGS; ++i) {
+        if (legs[i].segments.size() < 3) continue;
+        
+        // Get joints and bodies
+        dJointID kneeJoint = legs[i].segments[static_cast<int>(LegSegmentIndex::FEMUR)].joint;
+        dJointID ankleJoint = legs[i].segments[static_cast<int>(LegSegmentIndex::TIBIA)].joint;
+        dBodyID femurBody = legs[i].segments[static_cast<int>(LegSegmentIndex::FEMUR)].body;
+        dBodyID tibiaBody = legs[i].segments[static_cast<int>(LegSegmentIndex::TIBIA)].body;
+        
+        if (kneeJoint && ankleJoint && femurBody && tibiaBody) {
+            // Don't apply velocities - let physics settle naturally
+            // This prevents artificial forces that could cause instability
+            
+            // Set joint limits for standing pose
+            // Knee joint: allow natural range
+            dJointSetHingeParam(kneeJoint, dParamLoStop, -90.0 * M_PI / 180.0);
+            dJointSetHingeParam(kneeJoint, dParamHiStop, 90.0 * M_PI / 180.0);
+            
+            // Ankle joint: allow natural range
+            dJointSetHingeParam(ankleJoint, dParamLoStop, -90.0 * M_PI / 180.0);
+            dJointSetHingeParam(ankleJoint, dParamHiStop, 90.0 * M_PI / 180.0);
+            
+            // Add joint stop parameters for softer limits
+            dJointSetHingeParam(kneeJoint, dParamStopCFM, 0.001);
+            dJointSetHingeParam(kneeJoint, dParamStopERP, 0.8);
+            dJointSetHingeParam(ankleJoint, dParamStopCFM, 0.001);
+            dJointSetHingeParam(ankleJoint, dParamStopERP, 0.8);
+            
+            // Don't apply torques - let gravity settle the pose naturally
+        }
+    }
+    
+    // Let gravity handle the settling - no forced velocity
+    dBodySetLinearVel(bodyId, 0, 0, 0);
+    dBodySetAngularVel(bodyId, 0, 0, 0);
+    
+    // Silent initialization - no debug output
 }
 
 vsg_vec3 Robot::getPosition() const {
@@ -928,26 +1030,132 @@ std::vector<std::string> Robot::getActuatorNames() const {
     return names;
 }
 
+void Robot::setVisualParent(vsg::ref_ptr<vsg::MatrixTransform> parent) {
+#ifndef USE_OPENGL_FALLBACK
+    if (parent && !legNodes.empty()) {
+        // Remove legs from current parent if any
+        if (robotTransform) {
+            robotTransform->children.clear();
+        }
+        
+        // Add legs directly to the provided parent (e.g., Visualizer's robotTransform)
+        for (auto& legNode : legNodes) {
+            if (legNode) {
+                parent->addChild(legNode);
+            }
+        }
+        
+        // Use the parent as our robotTransform
+        robotTransform = parent;
+#ifdef DEBUG_ROBOT_INIT
+        std::cout << "🔗 Robot legs attached to external transform parent" << std::endl;
+#endif
+    }
+#endif
+}
+
 void Robot::createVisualModel() {
     #ifndef USE_OPENGL_FALLBACK
-    // Visual model is handled by Visualizer - create transform with proper initialization
+    // Create visual model with proper geometry for each leg segment
+    // Don't create robotTransform here - it will be set via setVisualParent
     if (!robotTransform) {
         robotTransform = vsg::MatrixTransform::create();
     }
+    
+    // Create a builder for generating geometry
+    auto builder = vsg::Builder::create();
+    auto options = vsg::Options::create();
+    options->paths = vsg::getEnvPaths("VSG_FILE_PATH");
+    options->sharedObjects = vsg::SharedObjects::create();
+    builder->options = options;
+    
+    // Set up shader set for proper rendering with proper error handling
+    auto shaderSet = vsg::createPhongShaderSet(options);
+    if (!shaderSet) {
+        std::cerr << "Warning: Failed to create Phong shader set. Creating basic shader set." << std::endl;
+        // Create a basic shader set as fallback
+        shaderSet = vsg::ShaderSet::create();
+    }
+    builder->shaderSet = shaderSet;
     
     // Initialize leg node storage for proper count
     int numSegmentsTotal = NUM_LEGS * SEGMENTS_PER_LEG;  // 6 legs * 3 segments = 18
     legNodes.clear();
     legNodes.resize(numSegmentsTotal);
     
-    // Create placeholder transforms for each leg segment
-    for (int i = 0; i < numSegmentsTotal; ++i) {
-        legNodes[i] = vsg::MatrixTransform::create();
-        robotTransform->addChild(legNodes[i]);
+    // Create visual geometry for each leg segment
+    vsg::GeometryInfo geomInfo;
+    vsg::StateInfo stateInfo;
+    stateInfo.lighting = true;
+    stateInfo.wireframe = false;
+    stateInfo.two_sided = false;
+    stateInfo.instance_colors_vec4 = false;
+    
+    // Colors for different segments
+    auto coxaColor = vsg::vec4(0.2f, 0.2f, 0.2f, 1.0f);   // Dark gray
+    auto femurColor = vsg::vec4(0.25f, 0.25f, 0.25f, 1.0f); // Medium gray
+    auto tibiaColor = vsg::vec4(0.3f, 0.3f, 0.3f, 1.0f);   // Light gray
+    auto footColor = vsg::vec4(0.8f, 0.2f, 0.2f, 1.0f);    // Red
+    
+    int segmentIndex = 0;
+    for (int legIdx = 0; legIdx < NUM_LEGS; ++legIdx) {
+        for (int segIdx = 0; segIdx < SEGMENTS_PER_LEG; ++segIdx, ++segmentIndex) {
+            legNodes[segmentIndex] = vsg::MatrixTransform::create();
+            
+            // Set up geometry based on segment type
+            float segmentLength = 0.0f;
+            vsg::vec4 segmentColor;
+            
+            switch (segIdx) {
+                case 0: // Coxa
+                    segmentLength = config.coxaLength;
+                    segmentColor = coxaColor;
+                    break;
+                case 1: // Femur
+                    segmentLength = config.femurLength;
+                    segmentColor = femurColor;
+                    break;
+                case 2: // Tibia
+                    segmentLength = config.tibiaLength;
+                    segmentColor = tibiaColor;
+                    break;
+            }
+            
+            // Create cylinder for leg segment
+            geomInfo.position.set(0.0f, 0.0f, 0.0f);
+            geomInfo.dx.set(config.legRadius, 0.0f, 0.0f);
+            geomInfo.dy.set(0.0f, config.legRadius, 0.0f);
+            geomInfo.dz.set(0.0f, 0.0f, segmentLength);
+            geomInfo.color = segmentColor;
+            geomInfo.transform = vsg::translate(0.0, 0.0, static_cast<double>(segmentLength * 0.5)); // Center the cylinder
+            
+            auto segmentGeom = builder->createCylinder(geomInfo, stateInfo);
+            if (!segmentGeom) {
+                std::cerr << "ERROR: Failed to create cylinder geometry for leg segment!" << std::endl;
+                continue;
+            }
+            legNodes[segmentIndex]->addChild(segmentGeom);
+            
+            // Add foot sphere for tibia segments
+            if (segIdx == 2) { // Tibia
+                geomInfo.transform = vsg::translate(0.0, 0.0, static_cast<double>(segmentLength)); // At end of tibia
+                geomInfo.dx.set(config.legRadius * 2.0f, 0.0f, 0.0f);
+                geomInfo.dy.set(0.0f, config.legRadius * 2.0f, 0.0f);
+                geomInfo.dz.set(0.0f, 0.0f, config.legRadius * 2.0f);
+                geomInfo.color = footColor;
+                
+                auto footGeom = builder->createSphere(geomInfo, stateInfo);
+                if (footGeom) {
+                    legNodes[segmentIndex]->addChild(footGeom);
+                }
+            }
+            
+            // Don't add to robotTransform here - will be added via setVisualParent
+        }
     }
     
 #ifdef DEBUG_ROBOT_INIT
-    std::cout << "📊 Visual model prepared: " << numSegmentsTotal << " leg segment transforms" << std::endl;
+    std::cout << "📊 Visual model created: " << numSegmentsTotal << " leg segments with geometry" << std::endl;
 #endif
     #endif
 }
@@ -961,11 +1169,16 @@ vsg::ref_ptr<vsg::MatrixTransform> Robot::getRobotNode() {
 }
 
 void Robot::addToScene(vsg::ref_ptr<vsg::Group> scene) {
-    // Visual representation is handled by Visualizer
-    // Robot physics only manages the transform synchronization
+    // Add the robot transform to the scene
+    if (scene && robotTransform) {
+        scene->addChild(robotTransform);
 #ifdef DEBUG_ROBOT_INIT
-    std::cout << "🎨 Robot physics ready - visuals handled by Visualizer" << std::endl;
+        std::cout << "🎨 Robot transform added to scene with " << legNodes.size() << " leg segments" << std::endl;
 #endif
+    } else {
+        std::cerr << "ERROR: Cannot add robot to scene - " 
+                  << (scene ? "robotTransform is null" : "scene is null") << std::endl;
+    }
 }
 #else
 ref_ptr<MatrixTransform> Robot::getRobotNode() {
@@ -975,5 +1188,9 @@ ref_ptr<MatrixTransform> Robot::getRobotNode() {
 
 void Robot::addToScene(ref_ptr<Group> scene) {
     // OpenGL fallback - robot handled differently
+}
+
+void Robot::setVisualParent(ref_ptr<MatrixTransform> parent) {
+    // OpenGL fallback - not implemented
 }
 #endif

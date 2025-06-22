@@ -1,47 +1,17 @@
 #pragma once
 
 #include <ode/ode.h>
+#include "FallbackTypes.h"
 
 #ifdef USE_OPENGL_FALLBACK
-    #include <cmath>
-    #include <vector>
-    
-    // Simple vector classes for fallback mode
-    struct vec3 {
-        float x, y, z;
-        vec3(float x = 0, float y = 0, float z = 0) : x(x), y(y), z(z) {}
-        vec3 operator+(const vec3& other) const { return vec3(x + other.x, y + other.y, z + other.z); }
-        vec3 operator-(const vec3& other) const { return vec3(x - other.x, y - other.y, z - other.z); }
-        vec3 operator*(float s) const { return vec3(x * s, y * s, z * s); }
-        float length() const { return std::sqrt(x*x + y*y + z*z); }
-        vec3 normalize() const { float l = length(); return l > 0 ? *this * (1.0f/l) : vec3(); }
-    };
-    
     using vsg_vec3 = vec3;
-    
-    template<typename T>
-    struct ref_ptr {
-        T* ptr = nullptr;
-        ref_ptr() = default;
-        ref_ptr(T* p) : ptr(p) {}
-        T* operator->() { return ptr; }
-        const T* operator->() const { return ptr; }
-        T& operator*() { return *ptr; }
-        const T& operator*() const { return *ptr; }
-        operator bool() const { return ptr != nullptr; }
-    };
-    
-    class Group {
-    public:
-        std::vector<void*> children;
-        void addChild(void* child) { children.push_back(child); }
-    };
-    
-    class MatrixTransform {};
-    
+    using vsg_vec4 = vec4;
+    using vsg_quat = quat;
 #else
 #include <vsg/all.h>
     using vsg_vec3 = vsg::vec3;
+    using vsg_vec4 = vsg::vec4;
+    using vsg_quat = vsg::quat;
 #endif
 
 #include <vector>
@@ -103,6 +73,18 @@ public:
     std::vector<ContactPoint> getActiveContacts() const;
     bool checkRaycast(const vsg_vec3& start, const vsg_vec3& direction, float maxDistance, vsg_vec3& hitPoint);
     
+    // Raycast result structure
+    struct RaycastResult {
+        bool hit;
+        float distance;
+        vsg_vec3 point;
+        vsg_vec3 normal;
+        dGeomID geom;
+    };
+    
+    // Perform raycast and return detailed result
+    RaycastResult raycast(const vsg_vec3& origin, const vsg_vec3& direction, float maxDistance);
+    
     // Getters
     dWorldID getWorld() const { return world; }
     dSpaceID getSpace() const { return space; }
@@ -120,6 +102,7 @@ private:
     static void nearCallback(void* data, dGeomID o1, dGeomID o2);
     void handleCollision(dGeomID o1, dGeomID o2);
     void updateTransforms();
+    void emergencyGroundClamping();
     
     // ODE components
     dWorldID world;

@@ -1,5 +1,7 @@
 #pragma once
 
+#ifndef USE_OPENGL_FALLBACK
+
 #include <vsg/all.h>
 #include <map>
 #include <set>
@@ -75,4 +77,32 @@ private:
     void handleCameraSwitch();
     void handleDisplayToggle(vsg::KeySymbol key);
     void handleDebugToggle();
+    void handleNoiseIncrease();
+    void handleNoiseDecrease();
 };
+
+#else // USE_OPENGL_FALLBACK
+
+// Dummy input handler for OpenGL fallback
+#include "FallbackTypes.h"
+#include <memory>
+
+class RobotController;
+class Visualizer;
+
+class InputHandler {
+public:
+    InputHandler(RobotController*, Visualizer*) {}
+    static std::unique_ptr<InputHandler> create(RobotController* c, Visualizer* v) {
+        return std::make_unique<InputHandler>(c, v);
+    }
+    void updateMovement() {}
+    vec3 getMovementVector() const { return vec3(); }
+    float getRotationSpeed() const { return 0; }
+    bool shouldShowStats() const { return false; }
+    bool shouldShowHelp() const { return false; }
+    bool shouldShowDebug() const { return false; }
+    bool isManualControlActive() const { return false; }
+};
+
+#endif // USE_OPENGL_FALLBACK

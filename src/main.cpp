@@ -16,12 +16,12 @@
 #include "InputHandler.h"
 #include "DebugOutput.h"
 #include "NoiseManager.h"
-#include "TestEventHandler.h"
-#include "ComprehensiveEventDebugger.h"
+// Event handlers only available with VSG
 
 #ifndef USE_OPENGL_FALLBACK
 #include <vsg/all.h>
 #include <vsgXchange/all.h>
+// Event handlers only available with VSG
 #endif
 
 #include "PositionUtils.h"
@@ -52,8 +52,8 @@ public:
     }
 
     bool initialize() {
-        // Create visualizer with smaller window size
-        visualizer = std::make_unique<Visualizer>(800, 600);
+        // Create visualizer with smaller window size for better performance
+        visualizer = std::make_unique<Visualizer>(1024, 768);
         if (!visualizer->initialize()) {
             std::cerr << "Failed to initialize visualizer" << std::endl;
             return false;
@@ -67,17 +67,17 @@ public:
         sceneRoot = vsg::Group::create();
 #endif
         visualizer->setSceneRoot(sceneRoot);
-        visualizer->enableVSync(false);
+        visualizer->enableVSync(true);  // Enable VSync for smoother rendering
 
         // Setup lighting
         setupLighting();
 
         // Create physics world
         physicsWorld = std::make_unique<PhysicsWorld>();
-        physicsWorld->setGravity(vsg_vec3(0.0f, 0.0f, -9.81f)); // Full gravity - rely on good physics params
-        physicsWorld->setGroundFriction(10.0f);  // Extremely high friction to prevent sliding
-        physicsWorld->setGroundBounce(0.0f);     // No bounce at all
-        physicsWorld->enableAdaptiveStepping(true);
+        physicsWorld->setGravity(vsg_vec3(0.0f, 0.0f, -9.81f)); // Standard gravity
+        physicsWorld->setGroundFriction(1.0f);   // Normal friction
+        physicsWorld->setGroundBounce(0.0f);     // No bounce
+        physicsWorld->enableAdaptiveStepping(false); // Use fixed timestep for stability
 
         // Create terrain
         terrain = std::make_unique<Terrain>(physicsWorld.get(), sceneRoot);
@@ -86,7 +86,8 @@ public:
         terrainParams.resolution = 128;
         terrainParams.maxHeight = 3.0f;
         terrainParams.roughness = 0.4f;
-        terrain->generate(Terrain::ROUGH, terrainParams);
+        // Use flat terrain for testing ground collision
+        terrain->generate(Terrain::FLAT, terrainParams);
 
         // Create robot
         robot = std::make_unique<Robot>(physicsWorld->getWorld(), physicsWorld->getSpace(), sceneRoot);
@@ -103,20 +104,29 @@ public:
             robot->getActuatorNames().size() // Number of actuators
         );
         
-        // Add robot visual model to scene root
+        // Connect robot legs to visualizer's robot transform
+#ifndef USE_OPENGL_FALLBACK
+        auto vizRobotTransform = visualizer->getRobotTransform();
+        if (vizRobotTransform) {
+            robot->setVisualParent(vizRobotTransform);
+            std::cout << "Connected robot legs to visualizer's transform" << std::endl;
+            // Recompile scene to include dynamic robot geometry
+            visualizer->compileScene();
+            std::cout << "Recompiled scene with robot geometry" << std::endl;
+        } else {
+            // Fallback: add robot's own transform to scene
+            robot->addToScene(sceneRoot);
+            visualizer->compileScene();
+        }
+#else
         robot->addToScene(sceneRoot);
-        std::cout << "Robot physics and visual model initialized" << std::endl;
-
+#endif
+        
         // Create robot controller
         controller = std::make_unique<RobotController>(robot.get(), physicsWorld.get());
         controller->setControlMode(RobotController::AUTONOMOUS);  // Start in autonomous mode
         controller->enableObstacleAvoidance(true);
         controller->enableDynamicStability(true);
-        
-        std::cout << "RobotController created and configured:" << std::endl;
-        std::cout << "  - Control Mode: AUTONOMOUS" << std::endl;
-        std::cout << "  - Obstacle Avoidance: ENABLED" << std::endl;
-        std::cout << "  - Dynamic Stability: ENABLED" << std::endl;
         
         // Create input handler
 #ifndef USE_OPENGL_FALLBACK
@@ -132,7 +142,7 @@ public:
         
         auto vsgInputHandler = InputHandler::create(controller.get(), visualizer.get());
         visualizer->addEventHandler(vsgInputHandler);
-        std::cout << "Added InputHandler to visualizer" << std::endl;
+        // Input handler added
         
         // Store raw pointer for access (VSG manages lifetime)
         inputHandlerPtr = vsgInputHandler.get();
@@ -148,14 +158,22 @@ public:
         // Add some obstacles
         addObstacles();
         
+        // Add a test box that should fall and hit the ground
+        physicsWorld->createBox(
+            vsg_vec3(0.0f, 2.0f, 2.0f),  // Position above ground
+            vsg_vec3(0.5f, 0.5f, 0.5f),   // Size
+            1.0f                          // Mass
+        );
+        
 
-        // Setup camera to look at robot initial position
-        float robotInitialZ = 1.0f; // From Robot::createBody()
+        // Setup camera to look at robot initial position in Orbit mode
+        float robotInitialZ = 0.5f; // From Robot::createBody() - proper standing height
         visualizer->setCameraPosition(vsg_vec3(5.0f, 5.0f, robotInitialZ + 2.0f));
         visualizer->setCameraTarget(vsg_vec3(0.0f, 0.0f, robotInitialZ));
+        visualizer->setCameraMode(Visualizer::CameraMode::ORBIT);  // Set default to Orbit mode
         visualizer->enableCameraFollow(false);
         
-        std::cout << "Camera looking at robot initial position Z=" << robotInitialZ << std::endl;
+        // Camera positioned
 
         // Enable visual effects
         visualizer->enablePostProcessing(true);
@@ -175,14 +193,14 @@ public:
     void run() {
         auto lastTime = std::chrono::high_resolution_clock::now();
         double accumulator = 0.0;
-        const double fixedTimeStep = 1.0 / 60.0; // 60 Hz physics for better performance
+        const double fixedTimeStep = 1.0 / 120.0; // 120 Hz physics for stable simulation
 
-        // Navigation goal disabled for visual testing
-        // RobotController::NavigationGoal goal;
-        // goal.position = makePosition(10.0f, 0.0f, 10.0f);
-        // goal.speed = 1.0f;
-        // goal.tolerance = 0.5f;
-        // controller->setNavigationGoal(goal);
+        // Set initial navigation goal to test leg movement
+        RobotController::NavigationGoal goal;
+        goal.position = makePosition(5.0f, 0.0f, 5.0f);
+        goal.speed = 0.5f;  // Slower speed for better observation
+        goal.tolerance = 0.5f;
+        controller->setNavigationGoal(goal);
 
         std::cout << "Starting main render loop..." << std::endl;
         std::cout << "\n=== CONTROLS ===" << std::endl;
@@ -200,10 +218,22 @@ public:
         std::this_thread::sleep_for(std::chrono::milliseconds(100));
         
         int frame = 0;
+        int physicsUpdates = 0;
+        auto loopStart = std::chrono::high_resolution_clock::now();
+        
         while (!visualizer->shouldClose() && !g_shouldExit) { // Run until user closes
             auto currentTime = std::chrono::high_resolution_clock::now();
             double deltaTime = std::chrono::duration<double>(currentTime - lastTime).count();
             lastTime = currentTime;
+            
+            // Debug: Log frame timing every 10 frames
+            if (frame % 10 == 0 && frame > 0) {
+                double totalTime = std::chrono::duration<double>(currentTime - loopStart).count();
+                std::cout << "[PERF] Frame " << frame << ": " 
+                          << frame/totalTime << " FPS, "
+                          << physicsUpdates/totalTime << " physics Hz, "
+                          << "deltaTime=" << deltaTime << "s" << std::endl;
+            }
 
             // Cap delta time to prevent spiral of death
             deltaTime = std::min(deltaTime, 0.1);
@@ -232,20 +262,11 @@ public:
                 }
 
                 accumulator -= fixedTimeStep;
+                physicsUpdates++;
             }
             
-            // Ground clamping - do this once per frame, not per physics step
-            const dReal* bodyPos = dBodyGetPosition(robot->getBody());
-            const float minBodyHeight = 0.7f;  // Increased height to ensure body doesn't touch ground
-            
-            // Simple height clamping with buffer zone
-            if (bodyPos[2] < minBodyHeight) {
-                dBodySetPosition(robot->getBody(), bodyPos[0], bodyPos[1], minBodyHeight);
-                const dReal* vel = dBodyGetLinearVel(robot->getBody());
-                if (vel[2] < 0) {
-                    dBodySetLinearVel(robot->getBody(), vel[0], vel[1], 0.0f);
-                }
-            }
+            // Let physics handle ground contact naturally
+            // No artificial intervention
 
             robot->updateLegPositions();
 
@@ -268,10 +289,11 @@ public:
             vsg_quat robotOrient = robot->getOrientation();
             visualizer->updateRobotTransform(robotPos, robotOrient);
             
-            // Check if robot reached goal and set new one (disabled for visual testing)
-            // if (controller->hasReachedGoal()) {
-            //     setRandomNavigationGoal();
-            // }
+            // Check if robot reached goal and set new one
+            if (controller->hasReachedGoal()) {
+                setRandomNavigationGoal();
+                std::cout << "Robot reached goal, setting new random navigation target" << std::endl;
+            }
 
             // Handle keyboard input
             handleInput();
@@ -499,7 +521,12 @@ private:
     std::unique_ptr<InputHandler> inputHandler;
 #endif
     InputHandler* inputHandlerPtr = nullptr;
-    ComprehensiveEventDebugger* eventDebuggerPtr = nullptr;
+#ifndef USE_OPENGL_FALLBACK
+    // ComprehensiveEventDebugger* eventDebuggerPtr = nullptr;
+    void* eventDebuggerPtr = nullptr;  // Disabled for now
+#else
+    void* eventDebuggerPtr = nullptr;
+#endif
     
 #ifdef USE_OPENGL_FALLBACK
     ref_ptr<Group> sceneRoot;

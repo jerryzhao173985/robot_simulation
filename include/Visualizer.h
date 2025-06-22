@@ -1,5 +1,7 @@
 #pragma once
 
+#include "FallbackTypes.h"
+
 #ifdef USE_OPENGL_FALLBACK
     #include <GLFW/glfw3.h>
     #ifdef __APPLE__
@@ -9,53 +11,10 @@
         #include <GL/gl.h>
         #include <GL/glu.h>
     #endif
-    #include <vector>
-    #include <array>
-    #include <cmath>
-    
-    // Simple vector classes for fallback mode
-    struct vec3 {
-        float x, y, z;
-        vec3(float x = 0, float y = 0, float z = 0) : x(x), y(y), z(z) {}
-        vec3 operator+(const vec3& other) const { return vec3(x + other.x, y + other.y, z + other.z); }
-        vec3 operator-(const vec3& other) const { return vec3(x - other.x, y - other.y, z - other.z); }
-        vec3 operator*(float s) const { return vec3(x * s, y * s, z * s); }
-        float length() const { return std::sqrt(x*x + y*y + z*z); }
-        vec3 normalize() const { float l = length(); return l > 0 ? *this * (1.0f/l) : vec3(); }
-    };
-    
-    struct vec4 {
-        float x, y, z, w;
-        vec4(float x = 0, float y = 0, float z = 0, float w = 1) : x(x), y(y), z(z), w(w) {}
-    };
-    
-    struct quat {
-        float x, y, z, w;
-        quat(float x = 0, float y = 0, float z = 0, float w = 1) : x(x), y(y), z(z), w(w) {}
-    };
     
     using vsg_vec3 = vec3;
     using vsg_vec4 = vec4;
     using vsg_quat = quat;
-    
-    template<typename T>
-    struct ref_ptr {
-        T* ptr = nullptr;
-        ref_ptr() = default;
-        ref_ptr(T* p) : ptr(p) {}
-        T* operator->() { return ptr; }
-        const T* operator->() const { return ptr; }
-        T& operator*() { return *ptr; }
-        const T& operator*() const { return *ptr; }
-        operator bool() const { return ptr != nullptr; }
-    };
-    
-    class Group {
-    public:
-        std::vector<void*> children;
-        void addChild(void* child) { children.push_back(child); }
-    };
-    
 #else
 #include <vsg/all.h>
 #include <vsgXchange/all.h>
@@ -166,6 +125,10 @@ public:
     
     // Robot synchronization
     void updateRobotTransform(const vsg_vec3& position, const vsg_quat& orientation);
+#ifndef USE_OPENGL_FALLBACK
+    vsg::ref_ptr<vsg::MatrixTransform> getRobotTransform() const { return robotTransform; }
+    void compileScene() { if (viewer) viewer->compile(); }
+#endif
     
     // UI overlay
     void showStats(bool show) { showStatistics = show; }
@@ -194,7 +157,12 @@ public:
     // Text rendering
     void createTextOverlay();
     void updateStatsText(float fps, float frameTime, const vsg_vec3& robotPos, 
-                        const vsg_vec3& robotVel, bool stable, const std::string& controlMode);
+                        const vsg_vec3& robotVel, bool stable, const std::string& controlMode,
+                        const vsg_vec3& moveCommand = vsg_vec3(0.0f, 0.0f, 0.0f), 
+                        float rotCommand = 0.0f,
+                        int footContacts = 0,
+                        const vsg_vec3& angularVelocity = vsg_vec3(0.0f, 0.0f, 0.0f),
+                        float avgJointVel = 0.0f);
     void updateControlsText(bool visible);
     void setShadowsEnabled(bool enable) { shadowsEnabled = enable; }
     void setTextVisible(bool stats, bool controls);
@@ -275,8 +243,8 @@ private:
     // Window properties
     uint32_t windowWidth;
     uint32_t windowHeight;
-    uint32_t msaaSamples = 4;
-    bool vsyncEnabled = true;
+    uint32_t msaaSamples = 1;  // Reduced from 4 for performance
+    bool vsyncEnabled = false;  // Disabled for performance testing
     
     // UI
     bool showStatistics = true;

@@ -1,31 +1,15 @@
 #pragma once
 
+#include "FallbackTypes.h"
+
 #ifdef USE_OPENGL_FALLBACK
-    #include <cmath>
-    #include <vector>
-    
-    // Simple vector classes for fallback mode
-    struct vec3 {
-        float x, y, z;
-        vec3(float x = 0, float y = 0, float z = 0) : x(x), y(y), z(z) {}
-        vec3 operator+(const vec3& other) const { return vec3(x + other.x, y + other.y, z + other.z); }
-        vec3 operator-(const vec3& other) const { return vec3(x - other.x, y - other.y, z - other.z); }
-        vec3 operator*(float s) const { return vec3(x * s, y * s, z * s); }
-        float length() const { return std::sqrt(x*x + y*y + z*z); }
-        vec3 normalize() const { float l = length(); return l > 0 ? *this * (1.0f/l) : vec3(); }
-    };
-    
-    struct quat {
-        float x, y, z, w;
-        quat(float x = 0, float y = 0, float z = 0, float w = 1) : x(x), y(y), z(z), w(w) {}
-    };
-    
     using vsg_vec3 = vec3;
+    using vsg_vec4 = vec4;
     using vsg_quat = quat;
-    
 #else
 #include <vsg/all.h>
     using vsg_vec3 = vsg::vec3;
+    using vsg_vec4 = vsg::vec4;
     using vsg_quat = vsg::quat;
 #endif
 
@@ -35,6 +19,7 @@
 #include <functional>
 #include <map>
 #include <algorithm>
+#include <array>
 
 class Robot;
 
@@ -105,6 +90,15 @@ public:
     bool isMoving() const;
     float getStability() const { return stabilityScore; }
     float getEfficiency() const { return efficiencyScore; }
+    
+    // Sensor status for display
+    struct SensorStatus {
+        int footContacts = 0;
+        vsg_vec3 angularVelocity;
+        float averageJointVelocity = 0.0f;
+        bool imuValid = false;
+    };
+    SensorStatus getSensorStatus() const;
 
 private:
     void updateManualControl(double deltaTime);
@@ -162,6 +156,30 @@ private:
     vsg_vec3 obstacleDirection;
     float obstacleDistance;
     std::vector<vsg_vec3> detectedObstacles;
+    
+    // Noise filtering for sensors
+    struct FilteredSensorData {
+        // Exponential moving average filter state
+        vsg_vec3 filteredAngularVel{0.0f, 0.0f, 0.0f};
+        vsg_quat filteredOrientation{0.0f, 0.0f, 0.0f, 1.0f};
+        vsg_vec3 filteredLinearAccel{0.0f, 0.0f, 0.0f};
+        
+        // Contact sensor voting buffer (last N frames)
+        static constexpr int CONTACT_HISTORY_SIZE = 5;
+        std::array<std::array<bool, 6>, CONTACT_HISTORY_SIZE> contactHistory{};
+        int contactHistoryIndex = 0;
+        
+        // EMA filter coefficients (0-1, higher = more weight on new data)
+        float angularVelAlpha = 0.3f;
+        float orientationAlpha = 0.5f;
+        float linearAccelAlpha = 0.2f;
+        
+        // Methods for filtering
+        void updateIMU(const vsg_quat& newOrientation, const vsg_vec3& newAngularVel, const vsg_vec3& newLinearAccel);
+        void updateContacts(const std::array<bool, 6>& contacts);
+        int getStableContactCount() const;
+        bool isFootStableContact(int footIndex) const;
+    } filteredSensorData;
     
     // Stability control
     PIDController pitchController;

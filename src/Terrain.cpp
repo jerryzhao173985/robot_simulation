@@ -7,11 +7,21 @@
 
 #include "PositionUtils.h"
 
+#ifdef USE_OPENGL_FALLBACK
+Terrain::Terrain(PhysicsWorld* physicsWorld, ref_ptr<Group> sceneGraph)
+    : physicsWorld(physicsWorld), sceneGraph(sceneGraph) {
+    
+    terrainGroup = ref_ptr<Group>(new Group());
+    if (sceneGraph && sceneGraph.ptr) {
+        sceneGraph->addChild(terrainGroup.ptr);
+    }
+#else
 Terrain::Terrain(PhysicsWorld* physicsWorld, vsg::ref_ptr<vsg::Group> sceneGraph)
     : physicsWorld(physicsWorld), sceneGraph(sceneGraph) {
     
     terrainGroup = vsg::Group::create();
     sceneGraph->addChild(terrainGroup);
+#endif
     
     // Initialize default parameters
     currentType = FLAT;
@@ -172,7 +182,12 @@ void Terrain::generateRough() {
             height += noise(fx * 3.1f, fz * 3.1f) * 0.5f;
             height += noise(fx * 7.7f, fz * 7.7f) * 0.25f;
             
-            heightData[z * size + x] = height * params.maxHeight * params.roughness;
+            // Scale and ensure terrain is above Z=0
+            height = height * params.maxHeight * params.roughness;
+            // Shift terrain up so minimum height is 0
+            height = std::max(0.0f, height + params.maxHeight * 0.5f);
+            
+            heightData[z * size + x] = height;
         }
     }
 }
@@ -291,7 +306,7 @@ void Terrain::generateNormals() {
             // Tangent vectors in x and y directions
             vsg::vec3 dx(scale, 0.0f, hR - hL);
             vsg::vec3 dy(0.0f, scale, hU - hD);
-            vsg::vec3 normal = vsg::normalize(vsg::cross(dx, dy));
+            vsg_vec3 normal = normalize(cross(dx, dy));
             normals[z * size + x] = normal;
         }
     }
@@ -385,15 +400,16 @@ void Terrain::createPhysicsMesh() {
     physicsVertices.clear();
     physicsIndices.clear();
     
-    // Generate vertices for physics
+    // Generate vertices for physics - ODE uses X,Y,Z coordinate system
     for (int z = 0; z < params.resolution; ++z) {
         for (int x = 0; x < params.resolution; ++x) {
             float worldX = (x / (float)(params.resolution - 1) - 0.5f) * params.size;
-            float worldZ = (z / (float)(params.resolution - 1) - 0.5f) * params.size;
-            float height = heightData[z * params.resolution + x];
+            float worldY = (z / (float)(params.resolution - 1) - 0.5f) * params.size;  // Y for forward/back
+            float height = heightData[z * params.resolution + x];  // Z for up
             
+            // ODE expects X,Y,Z order
             physicsVertices.push_back(worldX);
-            physicsVertices.push_back(worldZ);
+            physicsVertices.push_back(worldY);
             physicsVertices.push_back(height);
         }
     }
@@ -428,6 +444,10 @@ void Terrain::createPhysicsMesh() {
     
     // Create geometry
     terrainGeom = dCreateTriMesh(physicsWorld->getSpace(), meshData, 0, 0, 0);
+    
+    // Make sure terrain collides with everything
+    dGeomSetCategoryBits(terrainGeom, ~0);
+    dGeomSetCollideBits(terrainGeom, ~0);
     
     // Set friction
     // Note: ODE doesn't have per-geometry friction, it's set per contact

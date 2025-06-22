@@ -18,6 +18,18 @@
 #include <memory>
 #include <array>
 #include <mutex>
+#include <map>
+
+// Forward declarations
+class Sensor;
+class Actuator;
+class ContactSensor;
+class IMUSensor;
+class JointPositionSensor;
+class JointVelocitySensor;
+class PositionMotor;
+class VelocityMotor;
+class PhysicsWorld;
 
 class Robot {
 public:
@@ -50,7 +62,8 @@ public:
         bool isGrounded;
     };
 
-    struct Sensor {
+    // Deprecated - replaced by new sensor framework
+    struct LegacySensor {
         enum Type { PROXIMITY, GYROSCOPE, ACCELEROMETER, CONTACT };
         Type type;
         vsg_vec3 position;
@@ -80,9 +93,21 @@ public:
     vsg_vec3 getPosition() const;
     vsg_vec3 getVelocity() const;
     vsg_quat getOrientation() const;
-    std::vector<float> getSensorReadings() const;
+    std::vector<float> getSensorReadings() const;  // Legacy - returns simple sensor array
     float getEnergyConsumption() const { return energyConsumption; }
     bool isStable() const;
+    
+    // Sensor/Actuator access
+    Sensor* getSensor(const std::string& name);
+    Actuator* getActuator(const std::string& name);
+    std::vector<std::string> getSensorNames() const;
+    std::vector<std::string> getActuatorNames() const;
+    
+    // Update all sensors
+    void updateSensors(double deltaTime);
+    
+    // Set physics world for sensors that need it
+    void setPhysicsWorld(PhysicsWorld* world);
     
     // ODE body & geometry handles (for contact-based control)
     dBodyID getBody() const;
@@ -105,6 +130,7 @@ public:
     void createVisualModel();
     vsg::ref_ptr<vsg::MatrixTransform> getRobotNode();
     void addToScene(vsg::ref_ptr<vsg::Group> scene);
+    void setVisualParent(vsg::ref_ptr<vsg::MatrixTransform> parent);
     vsg_vec3 eulerAnglesFromQuat(const vsg_quat& q) const;
 #else
     ref_ptr<MatrixTransform> bodyTransform;
@@ -114,12 +140,16 @@ public:
     void createVisualModel();
     ref_ptr<MatrixTransform> getRobotNode();
     void addToScene(ref_ptr<Group> scene);
+    void setVisualParent(ref_ptr<MatrixTransform> parent);
     vsg_vec3 eulerAnglesFromQuat(const vsg_quat& q) const;
 #endif
 
 private:
     void createBody();
     void createLegs();
+    void createSensors();
+    void createActuators();
+    void setDefaultStandingPose();
     vsg_vec3 getLegPosition(int legIndex) const;
     void applyForces();
     void maintainBalance();
@@ -164,7 +194,20 @@ private:
     static constexpr int NUM_LEGS = 6;
     static constexpr int SEGMENTS_PER_LEG = 3;  // coxa, femur, tibia (anatomical order)
     std::array<Leg, NUM_LEGS> legs;
-    std::vector<Sensor> sensors;
+    std::vector<LegacySensor> legacySensors;  // Deprecated
+    
+    // New sensor/actuator framework
+    std::map<std::string, std::unique_ptr<Sensor>> sensors;
+    std::map<std::string, std::unique_ptr<Actuator>> actuators;
+    
+    // Quick access to specific sensors
+    IMUSensor* imuSensor = nullptr;
+    std::vector<ContactSensor*> footContactSensors;
+    std::vector<JointPositionSensor*> jointPositionSensors;
+    std::vector<JointVelocitySensor*> jointVelocitySensors;
+    
+    // Quick access to actuators
+    std::vector<VelocityMotor*> jointMotors;
     
     // Control parameters
     float moveSpeed = 2.0f;

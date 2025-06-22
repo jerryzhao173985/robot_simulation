@@ -1,10 +1,13 @@
 #include "RobotController.h"
 #include "Robot.h"
 #include "DebugOutput.h"
+#include "Sensor.h"
+#include "NoiseManager.h"
 #include <cmath>
 #include <algorithm>
 #include <iostream>
 #include <sstream>
+#include <iomanip>
 #include <fstream>
 #include "PositionUtils.h"
 
@@ -84,11 +87,50 @@ void RobotController::update(double deltaTime) {
 }
 
 void RobotController::updateManualControl(double deltaTime) {
-    // Debug output
-    static int debugCounter = 0;
-    if (++debugCounter % 60 == 0) { // Once per second
-        std::cout << "[RobotController] Manual velocity: (" << manualVelocity.x << ", " << manualVelocity.y << ", " << manualVelocity.z 
-                  << ") Rotation: " << manualRotation << std::endl;
+    // Enhanced debug logging with noise information
+    static int debugLogCounter = 0;
+    debugLogCounter++;
+    
+    // Log every second (60 frames) when noise is active
+    float noiseLevel = NoiseManager::getInstance().getNoiseLevel();
+    bool shouldLogDebug = (debugLogCounter == 1) || // First frame
+                         (debugLogCounter % 60 == 0) || // Every second
+                         (noiseLevel > 0.0f && debugLogCounter % 30 == 0); // Every 0.5s with noise
+    
+    if (shouldLogDebug) {
+        // Compact debug output - only essential info
+        int contactCount = 0;
+        int stableContactCount = filteredSensorData.getStableContactCount();
+        
+        // Count contacts silently
+        for (int i = 0; i < 6; ++i) {
+            std::string sensorName = "foot_contact_" + std::to_string(i);
+            if (auto* contact = robot->getSensor(sensorName)) {
+                auto reading = contact->getReading();
+                if (reading.valid && reading.values.size() > 0 && reading.values[0] > 0.5f) {
+                    contactCount++;
+                }
+            }
+        }
+        
+        // Get robot position for monitoring sinking
+        vsg_vec3 robotPos = robot->getPosition();
+        
+        // Only show critical info
+        std::cout << "[" << std::fixed << std::setprecision(1) << simulationTime << "s] "
+                  << "Contacts: " << contactCount << "/6, "
+                  << "Height: " << std::setprecision(2) << robotPos.z << "m";
+        
+        if (noiseLevel > 0.0f) {
+            std::cout << ", Noise: " << std::setprecision(1) << noiseLevel;
+        }
+        
+        // Warn if robot is sinking
+        if (robotPos.z < 0.3f) {
+            std::cout << " [WARNING: SINKING!]";
+        }
+        
+        std::cout << std::endl;
     }
     
     // Apply manual control from keyboard input
@@ -108,29 +150,71 @@ void RobotController::updateManualControl(double deltaTime) {
         // Generate motor commands for hexapod gait
         std::vector<float> motorCommands(18, 0.0f); // 6 legs * 3 joints
         
-        // Simple tripod gait for movement
-        float phase = fmod(simulationTime * 2.0, 2.0 * M_PI);
-        
-        for (int leg = 0; leg < 6; ++leg) {
-            bool isGroupA = (leg % 2 == 0); // Alternate legs
-            float legPhase = isGroupA ? phase : phase + M_PI;
-            
-            // Hip joint - controls leg swing
-            motorCommands[leg * 3 + 0] = manualVelocity.x * sin(legPhase) * 0.5f;
-            
-            // Knee joint - lifts leg during swing
-            motorCommands[leg * 3 + 1] = (sin(legPhase) > 0) ? 0.3f : -0.1f;
-            
-            // Ankle joint - maintains foot angle
-            motorCommands[leg * 3 + 2] = -motorCommands[leg * 3 + 1] * 0.5f;
+        // If noise is enabled but robot is not moving, set all commands to zero
+        // This allows the noise in actuators to be visible
+        if (NoiseManager::getInstance().getNoiseLevel() > 0.0f && 
+            std::abs(manualVelocity.x) < 0.01f && 
+            std::abs(manualVelocity.y) < 0.01f && 
+            std::abs(manualRotation) < 0.01f) {
+            // Let noise do the work - commands stay at zero
+            if (shouldLogDebug) {
+                std::cout << "\nNoise-only mode: All motor commands set to 0 to show pure noise effect" << std::endl;
+            }
+            robot->applyControl(motorCommands);
+            return;
         }
         
-        // Add turning
-        if (manualRotation != 0.0f) {
-            for (int leg = 0; leg < 6; ++leg) {
-                int side = (leg < 3) ? -1 : 1;
-                motorCommands[leg * 3 + 0] += manualRotation * side * 0.3f;
+        // Tripod gait with proper turning control
+        float gaitSpeed = 3.0f; // Gait cycle frequency
+        float phase = fmod(simulationTime * gaitSpeed, 2.0 * M_PI);
+        
+        // Calculate stride length based on velocity
+        float strideLength = manualVelocity.x * 0.8f;
+        float turnRadius = (manualRotation != 0.0f) ? 2.0f / std::abs(manualRotation) : 1000.0f;
+        
+        for (int leg = 0; leg < 6; ++leg) {
+            // Tripod groups: legs 0,2,4 vs 1,3,5
+            bool isGroupA = (leg % 2 == 0);
+            float legPhase = isGroupA ? phase : phase + M_PI;
+            
+            // Determine which side of robot (left=0,1,2  right=3,4,5)
+            bool isLeftSide = (leg < 3);
+            int legPair = leg % 3; // Front=0, Middle=1, Rear=2
+            
+            // Calculate differential stride for turning
+            float turnFactor = 1.0f;
+            if (manualRotation != 0.0f) {
+                // Inner legs move slower, outer legs move faster during turn
+                if ((manualRotation > 0 && isLeftSide) || (manualRotation < 0 && !isLeftSide)) {
+                    turnFactor = 1.0f - std::abs(manualRotation) * 0.5f; // Inner side
+                } else {
+                    turnFactor = 1.0f + std::abs(manualRotation) * 0.5f; // Outer side
+                }
             }
+            
+            // Hip joint - horizontal leg swing for forward motion and turning
+            float hipSwing = strideLength * turnFactor * sin(legPhase);
+            
+            // Add rotation component for turning
+            if (manualRotation != 0.0f) {
+                float rotComponent = manualRotation * (isLeftSide ? -1.0f : 1.0f) * 0.5f;
+                hipSwing += rotComponent * cos(legPhase);
+            }
+            
+            motorCommands[leg * 3 + 0] = hipSwing;
+            
+            // Knee joint - vertical lift during swing phase
+            bool inSwingPhase = sin(legPhase) > 0;
+            if (inSwingPhase) {
+                // Lift leg during swing
+                motorCommands[leg * 3 + 1] = 0.4f + 0.2f * sin(legPhase);
+            } else {
+                // Push down during stance
+                motorCommands[leg * 3 + 1] = -0.2f;
+            }
+            
+            // Ankle joint - maintain foot parallel to ground
+            motorCommands[leg * 3 + 2] = -motorCommands[leg * 3 + 1] * 0.7f;
         }
         
         robot->applyControl(motorCommands);
@@ -323,40 +407,100 @@ void RobotController::avoidObstacles() {
 void RobotController::maintainBalance(float deltaTime) {
     if (!dynamicStabilityEnabled || !physicsWorld) return;
 
-    // Orientation-based PID corrections
-    vsg::quat orientation = robot->getOrientation();
-    vsg::vec3 euler = eulerFromQuat(orientation);
-    float pitchCorr = pitchController.update(-euler.x, deltaTime);
-    float rollCorr  = rollController.update(-euler.z, deltaTime);
+    // Update filtered sensor data from IMU
+    if (auto* imu = robot->getSensor("body_imu")) {
+        auto reading = imu->getReading();
+        if (reading.valid && reading.values.size() >= 10) {
+            vsg_quat orientation(reading.values[0], reading.values[1], 
+                               reading.values[2], reading.values[3]);
+            vsg_vec3 angularVel(reading.values[4], reading.values[5], reading.values[6]);
+            vsg_vec3 linearAccel(reading.values[7], reading.values[8], reading.values[9]);
+            
+            filteredSensorData.updateIMU(orientation, angularVel, linearAccel);
+        }
+    }
+    
+    // Update contact sensor history
+    std::array<bool, 6> currentContacts{};
+    int contactIndex = 0;
+    for (const auto& name : robot->getSensorNames()) {
+        if (name.find("foot") != std::string::npos && name.find("contact") != std::string::npos) {
+            if (auto* sensor = robot->getSensor(name)) {
+                auto reading = sensor->getReading();
+                if (reading.valid && reading.values.size() > 0 && contactIndex < 6) {
+                    currentContacts[contactIndex] = reading.values[0] > 0.5f;
+                    contactIndex++;
+                }
+            }
+        }
+    }
+    filteredSensorData.updateContacts(currentContacts);
+    
+    // Use filtered orientation for PID control
+    vsg::vec3 euler = eulerFromQuat(filteredSensorData.filteredOrientation);
+    
+    // Adjust PID gains based on noise level
+    float noiseLevel = NoiseManager::getInstance().getNoiseLevel();
+    float gainReduction = 1.0f - (noiseLevel * 0.5f); // Reduce gains by up to 50% at max noise
+    
+    // Apply gain reduction to PID controllers
+    float adjustedPitchKp = pitchController.kp * gainReduction;
+    float adjustedRollKp = rollController.kp * gainReduction;
+    
+    // Calculate corrections with adjusted gains
+    float pitchError = -euler.x;
+    float rollError = -euler.z;
+    float pitchCorr = adjustedPitchKp * pitchError + pitchController.ki * pitchController.integral + 
+                      pitchController.kd * (pitchError - pitchController.previousError) / deltaTime;
+    float rollCorr = adjustedRollKp * rollError + rollController.ki * rollController.integral + 
+                     rollController.kd * (rollError - rollController.previousError) / deltaTime;
+    
+    // Update PID state
+    pitchController.previousError = pitchError;
+    rollController.previousError = rollError;
+    pitchController.integral += pitchError * deltaTime;
+    rollController.integral += rollError * deltaTime;
 
-    // Scale corrective forces for body weight support (tunable)
-    static constexpr float balanceForceScale = 50.0f; // Reduced from 200 to prevent overcorrection
+    // Scale corrective forces for body weight support
+    float balanceForceScale = 50.0f * gainReduction; // Also reduce force scale with noise
 
-    // Apply contact-based support forces on each foot
-    auto footGeoms = robot->getFootGeoms();
-    int totalContacts = 0;
-    for (auto footGeom : footGeoms) {
-        auto contacts = physicsWorld->getContactPoints(footGeom);
-        totalContacts += static_cast<int>(contacts.size());
-        for (auto& cp : contacts) {
-            float forceGain = (pitchCorr + rollCorr) * balanceForceScale;
-            dBodyAddForceAtPos(robot->getBody(),
-                              cp.normal.x * forceGain,
-                              cp.normal.y * forceGain,
-                              cp.normal.z * forceGain,
-                              cp.position.x, cp.position.y, cp.position.z);
+    // Only apply forces if we have stable ground contact (3+ feet)
+    int stableContacts = filteredSensorData.getStableContactCount();
+    if (stableContacts >= 3) {
+        // Apply contact-based support forces on each foot
+        auto footGeoms = robot->getFootGeoms();
+        int footIndex = 0;
+        for (auto footGeom : footGeoms) {
+            if (footIndex < 6 && filteredSensorData.isFootStableContact(footIndex)) {
+                auto contacts = physicsWorld->getContactPoints(footGeom);
+                for (auto& cp : contacts) {
+                    float forceGain = (pitchCorr + rollCorr) * balanceForceScale;
+                    dBodyAddForceAtPos(robot->getBody(),
+                                      cp.normal.x * forceGain,
+                                      cp.normal.y * forceGain,
+                                      cp.normal.z * forceGain,
+                                      cp.position.x, cp.position.y, cp.position.z);
+                }
+            }
+            footIndex++;
         }
     }
 
-    // Debug log every ~60 calls (~1s at 60Hz)
+    // Enhanced debug logging for balance control
     static int dbgCounter = 0;
-    if (++dbgCounter % 60 == 0) {
-        std::stringstream ss;
-        ss << "Balance: pitch=" << euler.x
-           << " roll=" << euler.z
-           << " contactCount=" << totalContacts
-           << " gain=" << (pitchCorr + rollCorr) * balanceForceScale;
-        DEBUG_VERBOSE(ss.str());
+    if (++dbgCounter % 60 == 0 && noiseLevel > 0.0f) {
+        std::cout << "\n--- BALANCE CONTROL DEBUG ---" << std::endl;
+        std::cout << "Euler Angles: roll=" << std::fixed << std::setprecision(1) 
+                  << euler.x * 180.0f/M_PI << "°, pitch=" << euler.y * 180.0f/M_PI << "°" << std::endl;
+        std::cout << "PID Errors: pitch=" << pitchError << ", roll=" << rollError << std::endl;
+        std::cout << "PID Corrections: pitch=" << pitchCorr << ", roll=" << rollCorr << std::endl;
+        std::cout << "Stable Contacts: " << stableContacts << "/6 (minimum 3 required)" << std::endl;
+        std::cout << "Gain Reduction: " << (1.0f - gainReduction) * 100 << "% (due to noise)" << std::endl;
+        std::cout << "Balance Force Scale: " << balanceForceScale << " (original: 50.0)" << std::endl;
+        
+        if (stableContacts < 3) {
+            std::cout << "WARNING: Not enough stable contacts for balance control!" << std::endl;
+        }
     }
 }
 
@@ -602,4 +746,118 @@ vsg::vec3 RobotController::eulerFromQuat(const vsg::quat& q) const {
     euler.z = std::atan2(siny_cosp, cosy_cosp);
     
     return euler;
+}
+
+RobotController::SensorStatus RobotController::getSensorStatus() const {
+    SensorStatus status;
+    
+    // Get IMU data
+    if (auto* imu = robot->getSensor("body_imu")) {
+        auto reading = imu->getReading();
+        if (reading.valid && reading.values.size() >= 10) {
+            status.angularVelocity = vsg::vec3(reading.values[4], reading.values[5], reading.values[6]);
+            status.imuValid = true;
+        }
+    }
+    
+    // Count foot contacts
+    for (int i = 0; i < 6; ++i) {
+        std::string sensorName = "foot_contact_" + std::to_string(i);
+        if (auto* contact = robot->getSensor(sensorName)) {
+            auto reading = contact->getReading();
+            if (reading.valid && reading.values.size() > 0 && reading.values[0] > 0.5f) {
+                status.footContacts++;
+            }
+        }
+    }
+    
+    // Calculate average joint velocity
+    float totalVel = 0.0f;
+    int jointCount = 0;
+    for (const auto& name : robot->getSensorNames()) {
+        if (name.find("_vel") != std::string::npos) {
+            if (auto* sensor = robot->getSensor(name)) {
+                auto reading = sensor->getReading();
+                if (reading.valid && reading.values.size() > 0) {
+                    totalVel += std::abs(reading.values[0]);
+                    jointCount++;
+                }
+            }
+        }
+    }
+    
+    if (jointCount > 0) {
+        status.averageJointVelocity = totalVel / jointCount;
+    }
+    
+    return status;
+}
+
+// FilteredSensorData implementation
+void RobotController::FilteredSensorData::updateIMU(const vsg_quat& newOrientation, 
+                                                   const vsg_vec3& newAngularVel, 
+                                                   const vsg_vec3& newLinearAccel) {
+    // Apply exponential moving average filter
+    // For angular velocity
+    filteredAngularVel.x = angularVelAlpha * newAngularVel.x + (1.0f - angularVelAlpha) * filteredAngularVel.x;
+    filteredAngularVel.y = angularVelAlpha * newAngularVel.y + (1.0f - angularVelAlpha) * filteredAngularVel.y;
+    filteredAngularVel.z = angularVelAlpha * newAngularVel.z + (1.0f - angularVelAlpha) * filteredAngularVel.z;
+    
+    // For orientation (using spherical linear interpolation for quaternions)
+    // Simple approximation for small changes
+    filteredOrientation.x = orientationAlpha * newOrientation.x + (1.0f - orientationAlpha) * filteredOrientation.x;
+    filteredOrientation.y = orientationAlpha * newOrientation.y + (1.0f - orientationAlpha) * filteredOrientation.y;
+    filteredOrientation.z = orientationAlpha * newOrientation.z + (1.0f - orientationAlpha) * filteredOrientation.z;
+    filteredOrientation.w = orientationAlpha * newOrientation.w + (1.0f - orientationAlpha) * filteredOrientation.w;
+    
+    // Normalize quaternion
+    float mag = std::sqrt(filteredOrientation.x * filteredOrientation.x + 
+                         filteredOrientation.y * filteredOrientation.y + 
+                         filteredOrientation.z * filteredOrientation.z + 
+                         filteredOrientation.w * filteredOrientation.w);
+    if (mag > 0.0f) {
+        filteredOrientation.x /= mag;
+        filteredOrientation.y /= mag;
+        filteredOrientation.z /= mag;
+        filteredOrientation.w /= mag;
+    }
+    
+    // For linear acceleration
+    filteredLinearAccel.x = linearAccelAlpha * newLinearAccel.x + (1.0f - linearAccelAlpha) * filteredLinearAccel.x;
+    filteredLinearAccel.y = linearAccelAlpha * newLinearAccel.y + (1.0f - linearAccelAlpha) * filteredLinearAccel.y;
+    filteredLinearAccel.z = linearAccelAlpha * newLinearAccel.z + (1.0f - linearAccelAlpha) * filteredLinearAccel.z;
+}
+
+void RobotController::FilteredSensorData::updateContacts(const std::array<bool, 6>& contacts) {
+    // Store in circular buffer
+    contactHistory[contactHistoryIndex] = contacts;
+    contactHistoryIndex = (contactHistoryIndex + 1) % CONTACT_HISTORY_SIZE;
+}
+
+int RobotController::FilteredSensorData::getStableContactCount() const {
+    int stableCount = 0;
+    
+    // For each foot, check if it has been in contact for majority of history
+    for (int foot = 0; foot < 6; ++foot) {
+        if (isFootStableContact(foot)) {
+            stableCount++;
+        }
+    }
+    
+    return stableCount;
+}
+
+bool RobotController::FilteredSensorData::isFootStableContact(int footIndex) const {
+    if (footIndex < 0 || footIndex >= 6) return false;
+    
+    // Count how many times this foot has been in contact in history
+    int contactCount = 0;
+    for (int i = 0; i < CONTACT_HISTORY_SIZE; ++i) {
+        if (contactHistory[i][footIndex]) {
+            contactCount++;
+        }
+    }
+    
+    // Require at least 3 out of 5 frames for stable contact
+    return contactCount >= 3;
 }
