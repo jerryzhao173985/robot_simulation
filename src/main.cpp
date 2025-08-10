@@ -11,6 +11,7 @@
 #include "Robot.h"
 #include "PhysicsWorld.h"
 #include "RobotController.h"
+#include "EnhancedRobotController.h"
 #include "Terrain.h"
 #include "Visualizer.h"
 #include "InputHandler.h"
@@ -45,6 +46,7 @@ public:
     ~RobotSimulation() {
         // Ensure all ODE-dependent objects are destroyed before closing ODE
         terrain.reset();
+        enhancedController.reset();
         controller.reset();
         robot.reset();
         physicsWorld.reset();
@@ -122,11 +124,28 @@ public:
         robot->addToScene(sceneRoot);
 #endif
         
-        // Create robot controller
-        controller = std::make_unique<RobotController>(robot.get(), physicsWorld.get());
+        // Create robot controller - enhanced version with advanced algorithms
+        enhancedController = std::make_unique<EnhancedRobotController>(robot.get(), physicsWorld.get());
+        
+        // Configure enhanced parameters
+        EnhancedRobotController::EnhancedParams enhancedParams;
+        enhancedParams.useInverseKinematics = true;
+        enhancedParams.adaptiveGait = true;
+        enhancedParams.terrainAdaptation = true;
+        enhancedParams.dynamicStability = true;
+        enhancedParams.enablePathPlanning = true;
+        enhancedParams.enableAdvancedGait = true;
+        enhancedParams.enableLearning = false;  // Disable learning initially
+        enhancedController->setEnhancedParams(enhancedParams);
+        
+        // Use base controller interface for compatibility
+        controller = enhancedController.get();
+        
         controller->setControlMode(RobotController::AUTONOMOUS);  // Start in autonomous mode
         controller->enableObstacleAvoidance(true);
         controller->enableDynamicStability(true);
+        
+        std::cout << "✅ Enhanced Robot Controller initialized with advanced algorithms!" << std::endl;
         
         // Create input handler
 #ifndef USE_OPENGL_FALLBACK
@@ -515,6 +534,7 @@ private:
     std::unique_ptr<PhysicsWorld> physicsWorld;
     std::unique_ptr<Robot> robot;
     std::unique_ptr<RobotController> controller;
+    std::unique_ptr<EnhancedRobotController> enhancedController;
     std::unique_ptr<Terrain> terrain;
     
 #ifdef USE_OPENGL_FALLBACK

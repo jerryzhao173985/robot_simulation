@@ -37,8 +37,8 @@ if(NOT vsg_FOUND OR NOT vsgXchange_FOUND)
     message(STATUS "VSG not found, using OpenGL/GLFW fallback")
     set(USE_OPENGL_FALLBACK ON)  # Enable OpenGL fallback when VSG not available
     
-    # Find OpenGL and GLFW
-    find_package(OpenGL REQUIRED)
+    # Find OpenGL and GLFW (optional on Linux CI)
+    find_package(OpenGL QUIET)
     find_package(glfw3 QUIET)
     
     # If GLFW not found via CMake, try homebrew
@@ -57,8 +57,8 @@ if(NOT vsg_FOUND OR NOT vsgXchange_FOUND)
         endif()
     endif()
     
-    # Install GLFW if not found
-    if(NOT glfw3_FOUND)
+    # Install GLFW if not found (skip on Linux CI)
+    if(NOT glfw3_FOUND AND APPLE)
         message(STATUS "Installing GLFW via Homebrew...")
         execute_process(COMMAND brew install glfw)
         
@@ -93,32 +93,36 @@ find_package(ODE CONFIG QUIET)
 
 # If not found, try our custom module
 if(NOT ODE_FOUND AND NOT ODE_PC_FOUND)
-    message(STATUS "ODE not found, attempting to install via Homebrew...")
-    execute_process(
-        COMMAND brew install ode
-        RESULT_VARIABLE BREW_RESULT
-        OUTPUT_QUIET ERROR_QUIET
-    )
-    
-    if(BREW_RESULT EQUAL 0)
-        message(STATUS "ODE installed successfully via Homebrew")
-        # Refresh the search
-        find_package(PkgConfig REQUIRED)
-        pkg_check_modules(ODE_PC REQUIRED ode)
+    if(APPLE)
+        message(STATUS "ODE not found, attempting to install via Homebrew...")
+        execute_process(
+            COMMAND brew install ode
+            RESULT_VARIABLE BREW_RESULT
+            OUTPUT_QUIET ERROR_QUIET
+        )
         
-        # Set variables for compatibility
-        set(ODE_FOUND TRUE)
-        set(ODE_INCLUDE_DIRS ${ODE_PC_INCLUDE_DIRS})
-        set(ODE_LIBRARIES ${ODE_PC_LIBRARIES})
-        set(ODE_LIBRARY_DIRS ${ODE_PC_LIBRARY_DIRS})
+        if(BREW_RESULT EQUAL 0)
+            message(STATUS "ODE installed successfully via Homebrew")
+            # Refresh the search
+            find_package(PkgConfig REQUIRED)
+            pkg_check_modules(ODE_PC REQUIRED ode)
+            
+            # Set variables for compatibility
+            set(ODE_FOUND TRUE)
+            set(ODE_INCLUDE_DIRS ${ODE_PC_INCLUDE_DIRS})
+            set(ODE_LIBRARIES ${ODE_PC_LIBRARIES})
+            set(ODE_LIBRARY_DIRS ${ODE_PC_LIBRARY_DIRS})
+        else()
+            message(WARNING "Failed to install ODE via Homebrew")
+        endif()
     else()
-        message(FATAL_ERROR "Failed to install ODE. Please install manually: brew install ode")
+        message(WARNING "ODE not found on Linux system - some features may be disabled")
     endif()
 endif()
 
 # Fallback to our custom module if still not found
-if(NOT ODE_FOUND)
-    find_package(ODE REQUIRED)  # uses cmake/FindODE.cmake
+if(NOT ODE_FOUND AND NOT ODE_PC_FOUND)
+    find_package(ODE QUIET)  # uses cmake/FindODE.cmake, non-fatal
 endif()
 
 # Print ODE configuration for debugging
@@ -145,7 +149,18 @@ add_executable(vsg_ode_robot
     src/RobotController.cpp src/Terrain.cpp src/Visualizer.cpp
     src/InputHandler.cpp src/DebugOutput.cpp
     src/Sensor.cpp src/Actuator.cpp src/NoiseManager.cpp
+    src/ControlAlgorithms.cpp src/EnhancedRobotController.cpp
     noise/mac_drand48r.cpp)
+
+# Add control algorithms demo executable (standalone, header-only implementation)
+add_executable(control_algorithms_demo
+    src/ControlAlgorithmsDemo.cpp)
+    
+# Compile as header-only for standalone demo
+target_compile_definitions(control_algorithms_demo PRIVATE STANDALONE_BUILD HEADER_ONLY_ALGORITHMS)
+    
+# No additional libraries needed for demo
+target_link_libraries(control_algorithms_demo)
 
 # Add physics test executable (commented out - file doesn't exist)
 # add_executable(test_physics
@@ -155,13 +170,30 @@ add_executable(vsg_ode_robot
 # Link libraries based on available graphics backend
 if(USE_OPENGL_FALLBACK)
     target_compile_definitions(vsg_ode_robot PRIVATE USE_OPENGL_FALLBACK)
-    target_link_libraries(vsg_ode_robot
-        ${ODE_LIBRARIES} 
-        Threads::Threads
-        OpenGL::GL 
-        glfw)
-    message(STATUS "Linking with OpenGL/GLFW fallback")
-    message(STATUS "  ODE Libraries: ${ODE_LIBRARIES}")
+    
+    # Only link graphics libraries if they are available
+    set(GRAPHICS_LIBS)
+    if(OpenGL_FOUND)
+        list(APPEND GRAPHICS_LIBS OpenGL::GL)
+    endif()
+    if(TARGET glfw)
+        list(APPEND GRAPHICS_LIBS glfw)
+    endif()
+    
+    if(ODE_FOUND)
+        target_link_libraries(vsg_ode_robot
+            ${ODE_LIBRARIES} 
+            Threads::Threads
+            ${GRAPHICS_LIBS})
+        message(STATUS "Linking with OpenGL/GLFW fallback")
+        message(STATUS "  ODE Libraries: ${ODE_LIBRARIES}")
+        message(STATUS "  Graphics Libraries: ${GRAPHICS_LIBS}")
+    else()
+        message(WARNING "ODE not found - building without physics simulation")
+        target_link_libraries(vsg_ode_robot
+            Threads::Threads
+            ${GRAPHICS_LIBS})
+    endif()
 else()
     target_link_libraries(vsg_ode_robot
         vsg::vsg 
