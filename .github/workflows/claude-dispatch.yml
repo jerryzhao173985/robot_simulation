@@ -1,0 +1,47 @@
+# IMPORTANT: Do not move this file in your repo! Make sure it's located at .github/workflows/claude-dispatch.yml
+name: Claude Code Dispatch
+
+# IMPORTANT: Do not modify this `on` section!
+on:
+  repository_dispatch:
+    types: [claude-dispatch]
+
+jobs:
+  claude-dispatch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write 
+      issues: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      # - name: Preliminary Setup
+        # run: |
+          # echo "Setting up environment..."
+          # Add any preliminary setup commands here to setup Claude's dev environment
+          # e.g., npm install, etc.
+
+      - name: Run Claude Code
+        id: claude
+        uses: anthropics/claude-code-action@eap
+        with:
+          mode: 'remote-agent'
+          
+          # Optional: Specify an API key, otherwise we'll use your Claude account automatically
+          # anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+
+          # Optional: Specify model (defaults to Claude Sonnet 4, uncomment for Claude Opus 4)
+          model: "claude-opus-4-1-20250805"
+          
+          # Optional: Allow Claude to run specific commands
+          allowed_tools: "Bash(bash:*),Bash(sh:*),Bash(git:*),Bash(gh:*),Bash(diff:*),Bash(patch:*),Bash(ls:*),Bash(cp:*),Bash(mv:*),Bash(rm:*),Bash(mkdir:*),Bash(rmdir:*),Bash(touch:*),Bash(ln:*),Bash(cd:*),Bash(pwd:*),Bash(basename:*),Bash(dirname:*),Bash(cat:*),Bash(head:*),Bash(tail:*),Bash(grep:*),Bash(find:*),Bash(xargs:*),Bash(sort:*),Bash(uniq:*),Bash(cut:*),Bash(tr:*),Bash(echo:*),Bash(file:*),Bash(wc:*),Bash(tar:*),Bash(gzip:*),Bash(zip:*),Bash(unzip:*),Bash(sed:*),Bash(awk:*),Bash(make:*),Bash(cmake:*),Bash(autoconf:*),Bash(automake:*),Bash(libtool:*),Bash(m4:*),Bash(pkg-config:*),Bash(apt:*),Bash(apt-get:*),Bash(brew:*),Bash(gcc:*),Bash(g++:*),Bash(clang:*),Bash(clang++:*),Bash(ar:*),Bash(ld:*),Bash(cppcheck:*),Bash(clang-tidy:*),Bash(clang-format:*),Bash(test:*),Bash([[:*),Bash(chmod:*),Bash(ps:*),Bash(kill:*),Bash(uname:*),Bash(which:*),Bash(if:*),Bash(then:*),Bash(else:*),Bash(fi:*),Bash(for:*),Bash(do:*),Bash(done:*),Bash(true),Bash(false),Bash(export:*),Bash(source:*),Bash(ffmpeg:*),Bash(avconv:*),Bash(./start:*),Bash(./createNewSimulation.sh:*),Task,TodoWrite,Read,Write,Edit,Replace,MultiEdit,Glob,Grep,WebFetch(domain:**)"
+          
+
+          # Optional: Custom environment variables for Claude
+          # claude_env: |
+          #   NODE_ENV: test
